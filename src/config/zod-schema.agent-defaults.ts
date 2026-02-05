@@ -122,6 +122,8 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        model: z.string().optional(),
       })
       .strict()
       .optional(),

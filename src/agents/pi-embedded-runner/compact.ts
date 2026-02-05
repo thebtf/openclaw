@@ -39,6 +39,7 @@ import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../d
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
+import { parseModelRef } from "../model-selection.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
@@ -316,14 +317,28 @@ export async function compactEmbeddedPiSessionDirect(
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
   await ensureOpenClawModelsJson(params.config, agentDir);
+
+  // Override with compaction-specific model if configured
+  const compactionModelRef = params.config?.agents?.defaults?.compaction?.model?.trim();
+  let effectiveProvider = provider;
+  let effectiveModelId = modelId;
+  if (compactionModelRef) {
+    const parsed = parseModelRef(compactionModelRef, provider);
+    if (parsed) {
+      effectiveProvider = parsed.provider;
+      effectiveModelId = parsed.model;
+      log.info(`compaction: using override model ${effectiveProvider}/${effectiveModelId}`);
+    }
+  }
+
   const { model, error, authStorage, modelRegistry } = resolveModel(
-    provider,
-    modelId,
+    effectiveProvider,
+    effectiveModelId,
     agentDir,
     params.config,
   );
   if (!model) {
-    const reason = error ?? `Unknown model: ${provider}/${modelId}`;
+    const reason = error ?? `Unknown model: ${effectiveProvider}/${effectiveModelId}`;
     return fail(reason);
   }
   try {
@@ -766,7 +781,7 @@ export async function compactEmbeddedPiSessionDirect(
         if (diagEnabled && preMetrics) {
           log.debug(
             `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+              `diagId=${diagId} trigger=${trigger} provider=${effectiveProvider}/${effectiveModelId} ` +
               `attempt=${attempt} maxAttempts=${maxAttempts} ` +
               `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
               `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
@@ -787,12 +802,19 @@ export async function compactEmbeddedPiSessionDirect(
           };
         }
 
+        const compactionTimeoutMs =
+          params.config?.agents?.defaults?.compaction?.timeoutMs ?? undefined;
         const compactStartedAt = Date.now();
         // Measure compactedCount from the original pre-limiting transcript so compaction
         // lifecycle metrics represent total reduction through the compaction pipeline.
         const messageCountCompactionInput = messageCountOriginal;
-        const result = await compactWithSafetyTimeout(() =>
-          session.compact(params.customInstructions),
+        log.info(
+          `compaction: start sessionId=${params.sessionId} ` +
+            `model=${effectiveProvider}/${effectiveModelId} timeoutMs=${compactionTimeoutMs ?? "default"}`,
+        );
+        const result = await compactWithSafetyTimeout(
+          () => session.compact(params.customInstructions),
+          compactionTimeoutMs,
         );
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
@@ -811,11 +833,17 @@ export async function compactEmbeddedPiSessionDirect(
         }
         const messageCountAfter = session.messages.length;
         const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
+        log.info(
+          `compaction: done sessionId=${params.sessionId} ` +
+            `model=${effectiveProvider}/${effectiveModelId} ` +
+            `tokensBefore=${result.tokensBefore} tokensAfter=${tokensAfter ?? "?"} ` +
+            `durationMs=${Date.now() - compactStartedAt}`,
+        );
         const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics && postMetrics) {
           log.debug(
             `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+              `diagId=${diagId} trigger=${trigger} provider=${effectiveProvider}/${effectiveModelId} ` +
               `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
               `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
               `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
