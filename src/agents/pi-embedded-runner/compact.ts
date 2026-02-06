@@ -400,13 +400,13 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,
-      modelId,
+      modelId: effectiveModelId,
       modelContextWindowTokens: model.contextWindow,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
+    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: effectiveProvider });
     const allowedToolNames = collectAllowedToolNames({ tools });
-    logToolSchemasForGoogle({ tools, provider });
+    logToolSchemasForGoogle({ tools, provider: effectiveProvider });
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
@@ -474,14 +474,14 @@ export async function compactEmbeddedPiSessionDirect(
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),
       node: process.version,
-      model: `${provider}/${modelId}`,
+      model: `${effectiveProvider}/${effectiveModelId}`,
       shell: detectRuntimeShell(),
       channel: runtimeChannel,
       capabilities: runtimeCapabilities,
       channelActions,
     };
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
-    const reasoningTagHint = isReasoningTagProvider(provider);
+    const reasoningTagHint = isReasoningTagProvider(effectiveProvider);
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
@@ -546,8 +546,8 @@ export async function compactEmbeddedPiSessionDirect(
       await prewarmSessionFile(params.sessionFile);
       const transcriptPolicy = resolveTranscriptPolicy({
         modelApi: model.api,
-        provider,
-        modelId,
+        provider: effectiveProvider,
+        modelId: effectiveModelId,
       });
       const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
@@ -566,8 +566,8 @@ export async function compactEmbeddedPiSessionDirect(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
-        provider,
-        modelId,
+        provider: effectiveProvider,
+        modelId: effectiveModelId,
         model,
       });
       // Only create an explicit resource loader when there are extension factories
@@ -614,8 +614,8 @@ export async function compactEmbeddedPiSessionDirect(
         const prior = await sanitizeSessionHistory({
           messages: session.messages,
           modelApi: model.api,
-          modelId,
-          provider,
+          modelId: effectiveModelId,
+          provider: effectiveProvider,
           allowedToolNames,
           config: params.config,
           sessionManager,
