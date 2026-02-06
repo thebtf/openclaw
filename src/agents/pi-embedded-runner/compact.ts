@@ -648,12 +648,19 @@ export async function compactEmbeddedPiSessionDirect(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
+      // Disable reasoning for compaction sessions. The SDK's generateSummary()
+      // hardcodes reasoning: "high" which triggers extended thinking on
+      // reasoning-capable models. Extended thinking adds significant latency
+      // and token cost (16K+ budget) to summarization with marginal quality
+      // benefit, and not all API-compatible providers support thinking params.
+      const compactionModel = effectiveModel.reasoning ? { ...effectiveModel, reasoning: false } : effectiveModel;
+
       const { session } = await createAgentSession({
         cwd: effectiveWorkspace,
         agentDir,
         authStorage,
         modelRegistry,
-        model: effectiveModel,
+        model: compactionModel,
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         tools: builtInTools,
         customTools,
