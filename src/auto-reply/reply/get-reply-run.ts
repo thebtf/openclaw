@@ -398,18 +398,34 @@ export async function runPreparedReply(
     }
   }
   if (resetTriggered && command.isAuthorizedSender) {
-    await sendResetSessionNotice({
-      ctx,
-      command,
-      sessionKey,
-      cfg,
-      accountId: ctx.AccountId,
-      threadId: ctx.MessageThreadId,
-      provider,
-      model,
-      defaultProvider,
-      defaultModel,
-    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const channel = ctx.OriginatingChannel || (command.channel as any);
+    const to = ctx.OriginatingTo || command.from || command.to;
+    if (channel && to && !isGroupChat) {
+      const modelLabel = `${provider}/${model}`;
+      const defaultLabel = `${defaultProvider}/${defaultModel}`;
+      const modelAuthLabel = resolveModelAuthLabel({
+        provider,
+        cfg,
+        sessionEntry,
+        agentDir,
+      });
+      const authSuffix =
+        modelAuthLabel && modelAuthLabel !== "unknown" ? ` · 🔑 ${modelAuthLabel}` : "";
+      const text =
+        modelLabel === defaultLabel
+          ? `✅ New session started · model: ${modelLabel}${authSuffix}`
+          : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})${authSuffix}`;
+      await routeReply({
+        payload: { text },
+        channel,
+        to,
+        sessionKey,
+        accountId: ctx.AccountId,
+        threadId: ctx.MessageThreadId,
+        cfg,
+      });
+    }
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(
