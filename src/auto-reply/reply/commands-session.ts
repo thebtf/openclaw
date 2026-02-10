@@ -1,5 +1,7 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import type { CommandHandler } from "./commands-types.js";
+import { listRunningSessions } from "../../agents/bash-process-registry.js";
+import { killProcessTree } from "../../agents/shell-utils.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -328,6 +330,27 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
+
+  // Kill all running exec sessions for this session
+  let killedProcesses = 0;
+  const targetKey = abortTarget.key ?? params.sessionKey;
+  if (targetKey) {
+    const runningSessions = listRunningSessions();
+    for (const session of runningSessions) {
+      if (session.sessionKey === targetKey) {
+        if (session.pid) {
+          killProcessTree(session.pid);
+        }
+        killedProcesses++;
+        logVerbose(`stop: killed exec session ${session.id} (pid=${session.pid})`);
+      }
+    }
+  }
+
+  if (abortTarget.sessionId) {
+    abortEmbeddedPiRun(abortTarget.sessionId);
+  }
+
   const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
@@ -359,6 +382,10 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     cfg: params.cfg,
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });
+
+  if (killedProcesses > 0) {
+    logVerbose(`stop: total killed processes=${killedProcesses}`);
+  }
 
   return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
 };
