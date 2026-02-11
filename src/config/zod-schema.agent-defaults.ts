@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HeimdallSchema } from "../security/heimdall/config-schema.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
@@ -151,6 +152,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    heimdall: HeimdallSchema,
     sandbox: AgentSandboxSchema,
   })
   .strict()
