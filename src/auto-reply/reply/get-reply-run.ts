@@ -158,6 +158,34 @@ export async function runPreparedReply(
   } = params;
   let currentSystemSent = systemSent;
 
+  // Heimdall RATE LIMIT: check per-sender throttle before any LLM work.
+  const heimdallRateConfig = cfg?.agents?.defaults?.heimdall;
+  if (heimdallRateConfig?.enabled && heimdallRateConfig.rateLimit?.enabled) {
+    const senderId = sessionCtx.SenderId?.trim();
+    if (senderId) {
+      const { getHeimdallRateLimiter } = await import("../../security/heimdall/rate-limit.js");
+      const { resolveSenderTier } = await import("../../security/heimdall/sender-tier.js");
+      const senderTier = resolveSenderTier(
+        senderId,
+        sessionCtx.SenderUsername?.trim() ?? undefined,
+        heimdallRateConfig,
+      );
+      const limiter = getHeimdallRateLimiter(heimdallRateConfig.rateLimit);
+      if (limiter) {
+        const result = limiter.check(senderId, senderTier);
+        if (!result.allowed) {
+          const { getHeimdallAuditLogger } = await import("../../security/heimdall/audit.js");
+          getHeimdallAuditLogger(heimdallRateConfig.audit).logRateLimit({
+            senderId,
+            senderTier,
+          });
+          typing.cleanup();
+          return { text: "Rate limit exceeded. Please wait before sending more messages." };
+        }
+      }
+    }
+  }
+
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
@@ -218,9 +246,22 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const baseBodyForPrompt = isBareSessionReset
+  let baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+
+  // Heimdall SANITIZE: apply input sanitization before LLM.
+  const heimdallCfg = cfg?.agents?.defaults?.heimdall;
+  if (heimdallCfg?.enabled && heimdallCfg.sanitize) {
+    const { sanitizeInput } = await import("../../security/heimdall/sanitize.js");
+    const { text: sanitized, warnings } = sanitizeInput(baseBodyForPrompt, heimdallCfg.sanitize);
+    if (warnings.length > 0) {
+      const { getHeimdallAuditLogger } = await import("../../security/heimdall/audit.js");
+      getHeimdallAuditLogger(heimdallCfg.audit).logSanitization({ warnings });
+    }
+    baseBodyForPrompt = sanitized;
+  }
+
   const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
