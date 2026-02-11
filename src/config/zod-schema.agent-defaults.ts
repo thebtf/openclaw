@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HeimdallSchema } from "../security/heimdall/config-schema.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
@@ -187,6 +188,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    heimdall: HeimdallSchema,
     sandbox: AgentSandboxSchema,
   })
   .strict()
