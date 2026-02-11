@@ -456,6 +456,8 @@ export async function runCronIsolatedAgentTurn(params: {
           runId: cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: true,
           disableMessageTool: deliveryRequested,
+          // Heimdall: cron jobs always run as OWNER.
+          senderIsOwner: true,
         });
       },
     });
