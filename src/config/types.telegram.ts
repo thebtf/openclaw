@@ -1,3 +1,4 @@
+import type { HeimdallConfig } from "../security/heimdall/types.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -194,6 +195,8 @@ export type TelegramAccountConfig = {
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
    */
   ackReaction?: string;
+  /** Per-account Heimdall security overrides (merged with global agentDefaults.heimdall). */
+  heimdall?: HeimdallConfig;
 };
 
 export type TelegramTopicConfig = {

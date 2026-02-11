@@ -1,4 +1,8 @@
 import fs from "node:fs";
+import type { TypingMode } from "../../config/types.js";
+import type { OriginatingChannelType, TemplateContext } from "../templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { TypingController } from "./typing.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -14,7 +18,6 @@ import {
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
-import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -26,9 +29,7 @@ import {
   buildFallbackNotice,
   resolveFallbackTransition,
 } from "../fallback-state.js";
-import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
@@ -56,7 +57,6 @@ import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
-import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
@@ -160,6 +160,7 @@ export async function runReplyAgent(params: {
     sessionKey,
     workspaceDir: followupRun.run.workspaceDir,
   });
+  const heimdallCfg = cfg?.agents?.defaults?.heimdall;
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply
       ? resolveEffectiveBlockStreamingConfig({
@@ -169,10 +170,17 @@ export async function runReplyAgent(params: {
           chunking: blockReplyChunking,
         }).coalescing
       : undefined;
+  // Heimdall FILTER (streaming): wrap onBlockReply to redact secrets in streamed chunks.
+  let blockReplyCallback = opts?.onBlockReply;
+  if (blockReplyCallback && heimdallCfg?.enabled) {
+    const { wrapBlockReplyWithFilter } =
+      await import("../../security/heimdall/streaming-filter.js");
+    blockReplyCallback = wrapBlockReplyWithFilter(blockReplyCallback, heimdallCfg);
+  }
   const blockReplyPipeline =
-    blockStreamingEnabled && opts?.onBlockReply
+    blockStreamingEnabled && blockReplyCallback
       ? createBlockReplyPipeline({
-          onBlockReply: opts.onBlockReply,
+          onBlockReply: blockReplyCallback,
           timeoutMs: blockReplyTimeoutMs,
           coalescing: blockReplyCoalescing,
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
@@ -698,6 +706,31 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+
+    // Heimdall FILTER: redact secrets from outbound reply payloads (batch).
+    if (heimdallCfg?.enabled && heimdallCfg.outputFilter?.enabled !== false) {
+      const { applyOutputFilter } = await import("../../security/heimdall/apply-filter.js");
+      finalPayloads = applyOutputFilter(finalPayloads, heimdallCfg);
+    }
+
+    // Post-compaction read audit (Layer 3)
+    if (sessionKey && pendingPostCompactionAudits.get(sessionKey)) {
+      pendingPostCompactionAudits.delete(sessionKey); // Delete FIRST — one-shot only
+      try {
+        const sessionFile = activeSessionEntry?.sessionFile;
+        if (sessionFile) {
+          const messages = readSessionMessages(sessionFile);
+          const readPaths = extractReadPaths(messages);
+          const workspaceDir = process.cwd();
+          const audit = auditPostCompactionReads(readPaths, workspaceDir);
+          if (!audit.passed) {
+            enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
+          }
+        }
+      } catch {
+        // Silent failure — audit is best-effort
+      }
     }
 
     return finalizeWithFollowup(
