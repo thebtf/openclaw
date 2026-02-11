@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
 import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
+import { HeimdallSchema } from "../security/heimdall/config-schema.js";
 import {
   resolveDiscordPreviewStreamMode,
   resolveSlackNativeStreaming,
@@ -215,6 +216,7 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    heimdall: HeimdallSchema,
   })
   .strict();
 
