@@ -4,10 +4,10 @@
  * Determines whether a given tool is allowed for a specific sender tier.
  * Evaluation order:
  *   1. OWNER bypass (always allowed, cannot be restricted by config)
- *   2. SYSTEM tier (conservative: MEMBER safe list, respects custom ACL)
- *   3. Normalize tool name via normalizeToolName
- *   4. Custom toolACL entries (glob-matched, first match wins)
- *   5. Default rules: dangerous patterns → deny; safe lists → allow; else deny
+ *   2. Normalize tool name via normalizeToolName
+ *   3. Custom toolACL entries (glob-matched, first match wins)
+ *   4. Default rules: dangerous patterns → deny; safe lists → allow; else deny
+ *      (SYSTEM tier uses MEMBER safe list as conservative baseline)
  */
 
 import type { HeimdallConfig, SenderTier } from "./types.js";
@@ -46,7 +46,34 @@ const DEFAULT_DANGEROUS_PATTERNS: string[] = [
   "mcp__*__delete_*",
 ];
 
-/** Tools considered safe for MEMBER tier by default. */
+/**
+ * Tools considered safe for MEMBER tier by default.
+ *
+ * **SYSTEM tier also uses this list** as conservative baseline (Task 1.3, Phase 1).
+ * SYSTEM tier gets read-only tools + audit trail, without OWNER privileges.
+ *
+ * **Rationale:**
+ * - All tools in this list are read-only or low-risk queries
+ * - No file writes, no command execution, no destructive operations
+ * - Suitable for internal runtime operations (cron, heartbeat, CLI)
+ *
+ * **To extend for SYSTEM tier**, add custom toolACL entry in config:
+ * ```typescript
+ * heimdall: {
+ *   enabled: true,
+ *   toolACL: [
+ *     {
+ *       pattern: "message",  // Allow notification delivery
+ *       allowedTiers: ["system", "member", "owner"],
+ *     },
+ *     {
+ *       pattern: "sessions_send",  // Allow agent-to-agent messaging
+ *       allowedTiers: ["system", "member", "owner"],
+ *     },
+ *   ],
+ * }
+ * ```
+ */
 const DEFAULT_MEMBER_SAFE: Set<string> = new Set([
   "search",
   "read",
@@ -108,9 +135,23 @@ function isDangerous(toolName: string): boolean {
  * 4. Defaults:
  *    a. Matches a dangerous pattern → deny.
  *    b. SYSTEM + tool in MEMBER safe list → allow (conservative baseline).
+ *       - SYSTEM tier uses same baseline as MEMBER (read-only tools)
+ *       - Rationale: internal operations (cron, CLI) need minimal privileges
+ *       - To extend: add custom toolACL entry with "system" in allowedTiers
  *    c. MEMBER + tool in MEMBER safe list → allow.
  *    d. GUEST + "read-only" policy + tool in read-only list → allow.
  *    e. Otherwise → deny.
+ *
+ * @example Extend SYSTEM tier baseline
+ * ```typescript
+ * // In heimdall config:
+ * toolACL: [
+ *   {
+ *     pattern: "message",  // Allow notifications
+ *     allowedTiers: ["system", "member", "owner"],
+ *   },
+ * ]
+ * ```
  */
 export function isToolAllowed(
   toolName: string,
