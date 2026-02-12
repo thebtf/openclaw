@@ -632,6 +632,8 @@ export async function runCronIsolatedAgentTurn(params: {
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            // Task 2.2: Mark cron jobs as internal runtime calls (SYSTEM tier).
+            internal: true,
             // Heimdall: cron jobs always run as OWNER.
             senderIsOwner: true,
           });
