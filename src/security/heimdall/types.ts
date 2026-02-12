@@ -3,22 +3,55 @@
  *
  * Deterministic security enforcement: GATE → SANITIZE → AUTHORIZE → FILTER
  *
- * Sender Tiers (from most to least privileged):
+ * Sender Tiers:
  *   OWNER   - Account owner (full access by default)
- *   SYSTEM  - Trusted internal runtime calls (cron, heartbeat)
+ *   SYSTEM  - Trusted internal runtime (same access as MEMBER; trust boundary marker)
  *   MEMBER  - Team member (read + safe operations)
  *   GUEST   - External user (minimal access, configurable)
+ *
+ * Resolution order: isTrustedInternal → OWNER → MEMBER → allowFrom → GUEST
+ * Privilege order: OWNER >> SYSTEM = MEMBER > GUEST
  */
 
 // ---------------------------------------------------------------------------
 // SenderTier
 // ---------------------------------------------------------------------------
 
+/**
+ * Sender tier constants (authorization hierarchy).
+ *
+ * Evaluation order (most to least privileged):
+ * - **OWNER:** Account owner or admin. Full unrestricted access by default (hardcoded bypass).
+ *   - Cannot be restricted by toolACL config
+ *   - Used for human administrators, CLI with owner credentials
+ * - **SYSTEM:** Trusted internal runtime calls (cron, heartbeat, maintenance).
+ *   - Conservative baseline: same as MEMBER safe list (read-only tools)
+ *   - Non-delegable: subagents do NOT inherit SYSTEM tier (security by design)
+ *   - To extend: add custom toolACL entry with "system" in allowedTiers
+ *   - Examples: `internal: true` in pi-tools, cron jobs, scheduled tasks
+ * - **MEMBER:** Team member with normal privileges.
+ *   - Safe list: read-only tools + low-risk operations (search, web_fetch, memory_search)
+ *   - No file writes, no command execution by default
+ * - **GUEST:** External user or unauthorized sender.
+ *   - Minimal access (read-only if defaultGuestPolicy = "read-only", else deny-all)
+ *
+ * **Migration from senderIsOwner:**
+ * - Old: `senderIsOwner: true` → forced OWNER tier (privilege escalation risk)
+ * - New: `internal: true` (pi-tools param) → SecurityContext.isTrustedInternal → SYSTEM tier (least privilege, auditable)
+ */
 export const SenderTier = {
+  /** Account owner or admin. Full unrestricted access (hardcoded bypass). */
   OWNER: "owner",
-  MEMBER: "member",
-  GUEST: "guest",
+  /**
+   * Trusted internal runtime calls (cron, heartbeat, maintenance).
+   * Conservative baseline: same as MEMBER safe list (read-only tools).
+   * Non-delegable: subagents do NOT inherit SYSTEM tier.
+   */
   SYSTEM: "system",
+  /** Team member with normal privileges. Safe list: read-only + low-risk tools. */
+  MEMBER: "member",
+  /** External user or unauthorized sender. Minimal access (read-only or deny-all). */
+  GUEST: "guest",
 } as const;
 
 export type SenderTier = (typeof SenderTier)[keyof typeof SenderTier];
@@ -37,6 +70,10 @@ export interface SecurityContext {
    * Examples: cron jobs, scheduled heartbeats, maintenance tasks.
    * These run without direct user interaction and should use SYSTEM tier
    * to prevent privilege escalation if compromised.
+   *
+   * **Note:** Takes precedence over all tier resolution — even senders in
+   * the owners list will resolve to SYSTEM (not OWNER) when this is set.
+   * This is intentional: automated calls should have minimal privileges.
    */
   isTrustedInternal?: boolean;
   channel: string;
@@ -120,6 +157,11 @@ export interface SenderTiersConfig {
   owners?: Array<string | number>;
   /** Sender IDs or usernames recognized as MEMBER. */
   members?: Array<string | number>;
+  /**
+   * No "system" list — SYSTEM tier is only assigned via SecurityContext.isTrustedInternal flag.
+   * This prevents external callers from claiming SYSTEM privileges via config.
+   * SYSTEM tier is reserved for trusted internal runtime (cron, heartbeat, CLI with `internal: true`).
+   */
 }
 
 // ---------------------------------------------------------------------------
