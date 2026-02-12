@@ -8,10 +8,29 @@
 import type { HeimdallAuditConfig, SanitizeWarning, SenderTier } from "./types.js";
 
 export interface HeimdallAuditLogger {
-  logToolBlocked(event: { toolName: string; senderTier: SenderTier; reason: string }): void;
-  logRedaction(event: { patterns: string[]; totalMatches: number }): void;
-  logRateLimit(event: { senderId: string | number; senderTier: SenderTier }): void;
-  logSanitization(event: { warnings: SanitizeWarning[] }): void;
+  logToolBlocked(event: {
+    toolName: string;
+    senderTier: SenderTier;
+    reason: string;
+    /**
+     * Optional: context for internal operations (cron, heartbeat, maintenance).
+     * Most relevant for SYSTEM tier events.
+     */
+    internal_reason?: string;
+    /**
+     * Optional: correlation ID for tracing multi-step operations.
+     * Useful for linking related audit events.
+     */
+    correlation_id?: string;
+  }): void;
+  logRedaction(event: { patterns: string[]; totalMatches: number; correlation_id?: string }): void;
+  logRateLimit(event: {
+    senderId: string | number;
+    senderTier: SenderTier;
+    internal_reason?: string;
+    correlation_id?: string;
+  }): void;
+  logSanitization(event: { warnings: SanitizeWarning[]; correlation_id?: string }): void;
 }
 
 const noopLogger: HeimdallAuditLogger = {
@@ -73,6 +92,8 @@ export function createHeimdallAuditLogger(config?: HeimdallAuditConfig): Heimdal
         toolName: event.toolName,
         senderTier: event.senderTier,
         reason: event.reason,
+        ...(event.internal_reason && { internal_reason: event.internal_reason }),
+        ...(event.correlation_id && { correlation_id: event.correlation_id }),
       });
     },
     logRedaction(event) {
@@ -82,6 +103,7 @@ export function createHeimdallAuditLogger(config?: HeimdallAuditConfig): Heimdal
       void emit("redaction", {
         patterns: event.patterns,
         totalMatches: event.totalMatches,
+        ...(event.correlation_id && { correlation_id: event.correlation_id }),
       });
     },
     logRateLimit(event) {
@@ -91,6 +113,8 @@ export function createHeimdallAuditLogger(config?: HeimdallAuditConfig): Heimdal
       void emit("rate_limit", {
         senderId: event.senderId,
         senderTier: event.senderTier,
+        ...(event.internal_reason && { internal_reason: event.internal_reason }),
+        ...(event.correlation_id && { correlation_id: event.correlation_id }),
       });
     },
     logSanitization(event) {
@@ -99,6 +123,7 @@ export function createHeimdallAuditLogger(config?: HeimdallAuditConfig): Heimdal
       }
       void emit("sanitization", {
         warnings: event.warnings,
+        ...(event.correlation_id && { correlation_id: event.correlation_id }),
       });
     },
   };
