@@ -65,11 +65,4 @@ describe("sanitizeInput integration", () => {
     expect(text).toBe("");
     expect(warnings).toHaveLength(0);
   });
-
-  it("heimdall disabled → sanitizeInput is not called (tested at caller level)", () => {
-    // This is enforced by the if-guard in get-reply-run.ts:
-    //   if (heimdallCfg?.enabled && heimdallCfg.sanitize) { ... }
-    // No code test needed — this verifies the contract.
-    expect(true).toBe(true);
-  });
 });

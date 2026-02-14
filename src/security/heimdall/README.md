@@ -269,13 +269,13 @@ image, memory_search, memory_get, web_search, web_fetch, agents_list
 
 ## Input Sanitization
 
-**Dangerous patterns in tool inputs are blocked.**
+**Input text is normalized and constrained before processing.**
 
-### Built-in Patterns
+### Built-in Protections
 
-- Command injection: `$(...)`, `` `...` ``, `$\{...\}`, `; rm -rf`, `| bash`
-- Path traversal: `../`, `..\\`, absolute paths in sandboxed tools
-- Script injection: `<script>`, `javascript:`, `eval(`, `setTimeout(`
+- **Truncation**: inputs exceeding `maxLength` are trimmed (default: 32,768 chars)
+- **NFKC normalization**: Unicode is normalized to prevent homoglyph-based bypasses
+- **Control character density check**: rejects inputs with excessive control characters
 
 ### Custom Patterns
 
