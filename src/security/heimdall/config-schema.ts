@@ -6,7 +6,12 @@
 
 import { z } from "zod";
 
-const SenderTierLiteral = z.union([z.literal("owner"), z.literal("member"), z.literal("guest")]);
+const SenderTierLiteral = z.union([
+  z.literal("owner"),
+  z.literal("system"),
+  z.literal("member"),
+  z.literal("guest"),
+]);
 
 export const HeimdallRateLimitSchema = z
   .object({

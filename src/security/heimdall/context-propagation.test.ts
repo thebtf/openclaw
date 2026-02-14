@@ -45,7 +45,7 @@ describe("SecurityContext propagation", () => {
     expect(tier).toBe(SenderTier.GUEST);
   });
 
-  it("senderIsOwner override: cron with no senderId in config still gets OWNER via override", () => {
+  it("resolveSenderTier returns GUEST for 'cron' sender ID by default", () => {
     // This tests the override logic in pi-tools.ts:
     // When senderIsOwner=true but senderId="cron" (not in owners list),
     // resolveSenderTier returns GUEST, but pi-tools overrides to OWNER.
