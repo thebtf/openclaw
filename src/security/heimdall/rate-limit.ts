@@ -11,6 +11,8 @@ const DEFAULT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_MESSAGES = 30;
 const DEFAULT_GUEST_MAX_MESSAGES = 5;
 const CLEANUP_INTERVAL_MS = 60_000;
+/** Hard cap on tracked senders to prevent memory exhaustion from ID spoofing. */
+const MAX_TRACKED_SENDERS = 10_000;
 
 /**
  * Binary search for the first index where timestamps[i] > cutoff.
@@ -62,6 +64,10 @@ export class HeimdallRateLimiter {
 
     let timestamps = this.windows.get(key);
     if (!timestamps) {
+      // Reject new senders when map is at capacity to prevent memory exhaustion.
+      if (this.windows.size >= MAX_TRACKED_SENDERS) {
+        return { allowed: false, remaining: 0, resetMs: this.windowMs };
+      }
       timestamps = [];
       this.windows.set(key, timestamps);
     }
