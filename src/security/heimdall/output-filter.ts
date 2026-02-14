@@ -8,6 +8,7 @@
  * Users can supply additional patterns via OutputFilterConfig.customPatterns.
  */
 
+import safeRegex from "safe-regex2";
 import type {
   OutputFilterConfig,
   OutputFilterPattern,
@@ -17,14 +18,23 @@ import type {
 import { DEPLOYMENT_PATTERNS } from "./patterns.js";
 
 export const BUILTIN_PATTERNS: OutputFilterPattern[] = [
-  { name: "OpenAI API Key", regex: "sk-[a-zA-Z0-9_\\-]{20,}", flags: "g" },
+  // DEPLOYMENT_PATTERNS first: more specific patterns (sk-ant-, xox*-, etc.)
+  // must match before the generic sk- pattern to ensure correct attribution.
+  ...DEPLOYMENT_PATTERNS,
+  { name: "OpenAI API Key", regex: "sk-(?!ant-)[a-zA-Z0-9_\\-]{20,}", flags: "g" },
   { name: "GitHub PAT", regex: "ghp_[a-zA-Z0-9]{36,}", flags: "g" },
   { name: "GitHub OAuth", regex: "gho_[a-zA-Z0-9]{36,}", flags: "g" },
   { name: "GitHub App", regex: "ghs_[a-zA-Z0-9]{36,}", flags: "g" },
   { name: "Bearer Token", regex: "Bearer\\s+[a-zA-Z0-9._\\-]{20,}", flags: "g" },
   { name: "AWS Access Key", regex: "AKIA[A-Z0-9]{16}", flags: "g" },
-  ...DEPLOYMENT_PATTERNS,
 ];
+
+/** Self-test: validate all built-in patterns are safe from ReDoS at load time. */
+for (const p of BUILTIN_PATTERNS) {
+  if (!safeRegex(p.regex)) {
+    throw new Error(`[heimdall] Built-in pattern "${p.name}" failed ReDoS safety check`);
+  }
+}
 
 /** Pre-compiled built-in regexes — avoids re-compilation on every redactOutput call. */
 const BUILTIN_COMPILED: Array<{ name: string; re: RegExp }> = BUILTIN_PATTERNS.map((p) => ({
@@ -71,6 +81,11 @@ export function redactOutput(text: string, config?: OutputFilterConfig): Redacti
   // Scan custom patterns (compiled on-demand — these vary per config).
   const customPatterns = config?.customPatterns ?? [];
   for (const pattern of customPatterns) {
+    // Validate regex safety before compiling to prevent ReDoS attacks.
+    if (!safeRegex(pattern.regex)) {
+      // Skip unsafe patterns that could cause catastrophic backtracking.
+      continue;
+    }
     let re: RegExp;
     try {
       re = new RegExp(pattern.regex, pattern.flags ?? "g");
