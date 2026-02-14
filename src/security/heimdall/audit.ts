@@ -23,7 +23,13 @@ export interface HeimdallAuditLogger {
      */
     correlation_id?: string;
   }): void;
-  logRedaction(event: { patterns: string[]; totalMatches: number; correlation_id?: string }): void;
+  logRedaction(event: {
+    patterns: string[];
+    totalMatches: number;
+    /** True when the match was detected across a streaming chunk boundary. */
+    crossChunk?: boolean;
+    correlation_id?: string;
+  }): void;
   logRateLimit(event: {
     senderId: string | number;
     senderTier: SenderTier;
@@ -103,6 +109,7 @@ export function createHeimdallAuditLogger(config?: HeimdallAuditConfig): Heimdal
       void emit("redaction", {
         patterns: event.patterns,
         totalMatches: event.totalMatches,
+        ...(event.crossChunk && { crossChunk: true }),
         ...(event.correlation_id && { correlation_id: event.correlation_id }),
       });
     },
