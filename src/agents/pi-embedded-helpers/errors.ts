@@ -622,6 +622,8 @@ const ERROR_PATTERNS = {
     "usage limit",
     "tpm",
     "tokens per minute",
+    "model_cooldown",
+    "cooling down",
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
