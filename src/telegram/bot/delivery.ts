@@ -423,7 +423,7 @@ export async function resolveMedia(
           });
         }
         return {
-          path: saved?.path ?? "",
+          path: saved?.path || undefined,
           contentType: saved?.contentType,
           placeholder: "<media:sticker>",
           stickerMetadata: {
