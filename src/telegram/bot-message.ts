@@ -95,7 +95,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         }),
       );
     } catch (err) {
-      logger.warn("message:received hook failed, continuing dispatch", { error: err });
+      logger.info({ error: err }, "message:received hook failed, continuing dispatch");
     }
 
     await dispatchTelegramMessage({
