@@ -1,6 +1,6 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import type { CommandHandler } from "./commands-types.js";
-import { listRunningSessions } from "../../agents/bash-process-registry.js";
+import { listAllRunningSessions } from "../../agents/bash-process-registry.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import { killProcessTree } from "../../agents/shell-utils.js";
 import { updateSessionStore } from "../../config/sessions.js";
@@ -335,7 +335,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   let killedProcesses = 0;
   const targetKey = abortTarget.key ?? params.sessionKey;
   if (targetKey) {
-    const runningSessions = listRunningSessions();
+    const runningSessions = listAllRunningSessions();
     for (const session of runningSessions) {
       if (session.sessionKey === targetKey) {
         if (session.pid) {
