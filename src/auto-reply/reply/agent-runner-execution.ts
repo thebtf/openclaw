@@ -456,6 +456,9 @@ export async function runAgentTurnWithFallback(params: {
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
+      // Only treat INVALID_ARGUMENT as corrupted session when the session file
+      // already exists (not a fresh conversation) and the error is not about
+      // model/config parameters (e.g. "model not found", "safety_settings").
       const isGeminiInvalidArgument =
         !isContextOverflow &&
         !isCompactionFailure &&
@@ -463,7 +466,8 @@ export async function runAgentTurnWithFallback(params: {
         !isRoleOrderingError &&
         /(?:INVALID_ARGUMENT|Request contains an invalid argument|400.*invalid argument)/i.test(
           message,
-        );
+        ) &&
+        !/(?:model|safety_settings|generation_config|api[_-]?key|quota)/i.test(message);
 
       if (
         isCompactionFailure &&
