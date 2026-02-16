@@ -611,6 +611,9 @@ export async function runCronIsolatedAgentTurn(params: {
           runId: cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: true,
           disableMessageTool: deliveryRequested,
+          // Task 2.2: Mark cron jobs as internal runtime calls (SYSTEM tier).
+          internal: true,
+          senderIsOwner: true, // Keep for now (legacy tool policy, removed in future)
         });
       },
     });
