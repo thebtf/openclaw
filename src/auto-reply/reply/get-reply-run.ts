@@ -243,7 +243,8 @@ export async function runPreparedReply(
       );
       const limiter = getHeimdallRateLimiter(heimdallRateConfig.rateLimit);
       if (limiter) {
-        const result = limiter.check(senderId, senderTier);
+        const rateScope = sessionCtx.OriginatingChannel || sessionKey;
+        const result = limiter.check(senderId, senderTier, rateScope);
         if (!result.allowed) {
           const { getHeimdallAuditLogger } = await import("../../security/heimdall/audit.js");
           getHeimdallAuditLogger(heimdallRateConfig.audit).logRateLimit({
