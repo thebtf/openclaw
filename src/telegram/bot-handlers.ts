@@ -246,7 +246,7 @@ export const registerTelegramHandlers = ({
       const allMedia: TelegramMediaRef[] = [];
       for (const { ctx } of entry.messages) {
         const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
-        if (media) {
+        if (media?.path) {
           allMedia.push({
             path: media.path,
             contentType: media.contentType,
@@ -945,7 +945,7 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const allMedia = media
+      const allMedia: TelegramMediaRef[] = media?.path
         ? [
             {
               path: media.path,

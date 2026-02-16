@@ -328,7 +328,7 @@ export async function resolveMedia(
   token: string,
   proxyFetch?: typeof fetch,
 ): Promise<{
-  path: string;
+  path?: string;
   contentType?: string;
   placeholder: string;
   stickerMetadata?: StickerMetadata;
