@@ -6,11 +6,11 @@ import { handleStopCommand } from "./commands-session.js";
 
 // Mock dependencies
 vi.mock("../../agents/bash-process-registry.js", () => ({
-  listRunningSessions: vi.fn(() => []),
+  listAllRunningSessions: vi.fn(() => []),
 }));
 
-vi.mock("../../agents/bash-tools.shared.js", () => ({
-  killSession: vi.fn(),
+vi.mock("../../agents/shell-utils.js", () => ({
+  killProcessTree: vi.fn(),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
@@ -38,11 +38,11 @@ describe("handleStopCommand with process killing", () => {
   });
 
   it("kills exec sessions matching sessionKey", async () => {
-    const { listRunningSessions } = await import("../../agents/bash-process-registry.js");
-    const { killSession } = await import("../../agents/bash-tools.shared.js");
+    const { listAllRunningSessions } = await import("../../agents/bash-process-registry.js");
+    const { killProcessTree } = await import("../../agents/shell-utils.js");
 
     // Mock running exec sessions
-    vi.mocked(listRunningSessions).mockReturnValue([
+    vi.mocked(listAllRunningSessions).mockReturnValue([
       {
         id: "session-1",
         sessionKey: "agent:main:telegram:12345",
@@ -111,22 +111,71 @@ describe("handleStopCommand with process killing", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe("⚙️ Agent was aborted.");
 
-    // Verify killSession was called only for matching session
-    expect(killSession).toHaveBeenCalledTimes(1);
-    expect(killSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "session-1",
+    // Verify killProcessTree was called only for matching session's pid
+    expect(killProcessTree).toHaveBeenCalledTimes(1);
+    expect(killProcessTree).toHaveBeenCalledWith(1001);
+  });
+
+  it("kills non-backgrounded exec sessions too", async () => {
+    const { listAllRunningSessions } = await import("../../agents/bash-process-registry.js");
+    const { killProcessTree } = await import("../../agents/shell-utils.js");
+
+    vi.mocked(listAllRunningSessions).mockReturnValue([
+      {
+        id: "fg-session",
         sessionKey: "agent:main:telegram:12345",
-        pid: 1001,
-      }),
-    );
+        pid: 2001,
+        command: "python train.py",
+        startedAt: Date.now(),
+        cwd: "/workspace",
+        maxOutputChars: 10000,
+        totalOutputChars: 0,
+        pendingStdout: [],
+        pendingStderr: [],
+        pendingStdoutChars: 0,
+        pendingStderrChars: 0,
+        aggregated: "",
+        tail: "",
+        exited: false,
+        truncated: false,
+        backgrounded: false, // NOT backgrounded — should still be killed
+      },
+    ]);
+
+    const params: HandleCommandsParams = {
+      command: {
+        commandBodyNormalized: "/stop",
+        rawBodyNormalized: "/stop",
+        isAuthorizedSender: true,
+        senderId: "user123",
+        surface: "telegram",
+        channel: "telegram",
+        from: "user123",
+        to: "bot",
+      },
+      sessionKey: "agent:main:telegram:12345",
+      sessionEntry: {
+        sessionId: "sess-abc",
+        sessionKey: "agent:main:telegram:12345",
+      } as SessionEntry,
+      sessionStore: {},
+      cfg: {} as OpenClawConfig,
+      ctx: {},
+      isGroup: false,
+    };
+
+    await handleStopCommand(params, true);
+
+    // Non-backgrounded sessions should now be killed too
+    expect(killProcessTree).toHaveBeenCalledTimes(1);
+    expect(killProcessTree).toHaveBeenCalledWith(2001);
   });
 
   it("does not kill processes when sessionKey is undefined", async () => {
-    const { listRunningSessions } = await import("../../agents/bash-process-registry.js");
-    const { killSession } = await import("../../agents/bash-tools.shared.js");
+    const { listAllRunningSessions } = await import("../../agents/bash-process-registry.js");
+    const { killProcessTree } = await import("../../agents/shell-utils.js");
 
-    vi.mocked(listRunningSessions).mockReturnValue([
+    vi.mocked(listAllRunningSessions).mockReturnValue([
       {
         id: "session-1",
         sessionKey: "agent:main:telegram:12345",
@@ -170,11 +219,11 @@ describe("handleStopCommand with process killing", () => {
     await handleStopCommand(params, true);
 
     // Should not attempt to kill any processes
-    expect(killSession).not.toHaveBeenCalled();
+    expect(killProcessTree).not.toHaveBeenCalled();
   });
 
   it("blocks unauthorized users from using /stop", async () => {
-    const { killSession } = await import("../../agents/bash-tools.shared.js");
+    const { killProcessTree } = await import("../../agents/shell-utils.js");
 
     const params: HandleCommandsParams = {
       command: {
@@ -198,6 +247,6 @@ describe("handleStopCommand with process killing", () => {
     const result = await handleStopCommand(params, true);
 
     expect(result).toEqual({ shouldContinue: false });
-    expect(killSession).not.toHaveBeenCalled();
+    expect(killProcessTree).not.toHaveBeenCalled();
   });
 });
