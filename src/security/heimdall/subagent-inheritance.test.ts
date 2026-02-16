@@ -16,7 +16,7 @@ describe("subagent SYSTEM tier inheritance (Task 2.4)", () => {
         heimdall: {
           enabled: true,
           senderTiers: {
-            owners: [111, "thebtf"],
+            owners: [111, "alice"],
             members: [222],
           },
         },
@@ -57,7 +57,7 @@ describe("subagent SYSTEM tier inheritance (Task 2.4)", () => {
       config: heimdallConfig,
       internal: true,
       senderId: 111,
-      senderUsername: "thebtf",
+      senderUsername: "alice",
     });
 
     // Subagent: uses parent senderId (111) but NO internal flag
@@ -66,7 +66,7 @@ describe("subagent SYSTEM tier inheritance (Task 2.4)", () => {
       config: heimdallConfig,
       internal: false, // NOT inherited from parent
       senderId: 111, // parent senderId propagated
-      senderUsername: "thebtf",
+      senderUsername: "alice",
     });
 
     expect(parentTools.length).toBeGreaterThan(0);

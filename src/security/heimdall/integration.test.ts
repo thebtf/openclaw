@@ -26,7 +26,7 @@ describe("Heimdall Full Pipeline Integration", () => {
   const baseConfig: HeimdallConfig = {
     enabled: true,
     senderTiers: {
-      owners: [111, "thebtf"],
+      owners: [111, "owner-user"],
       members: [222, "alice"],
     },
     defaultGuestPolicy: "deny",
@@ -72,7 +72,7 @@ describe("Heimdall Full Pipeline Integration", () => {
       expect(tier).toBe(SenderTier.OWNER);
 
       // SANITIZE
-      const { text: sanitized, warnings } = sanitizeInput("Hello world", baseConfig.sanitize!);
+      const { text: sanitized, warnings } = sanitizeInput("Hello world", baseConfig.sanitize);
       expect(sanitized).toBe("Hello world");
       expect(warnings).toHaveLength(0);
 
@@ -219,7 +219,7 @@ describe("Heimdall Full Pipeline Integration", () => {
     });
 
     it("username resolution works case-insensitively", () => {
-      const tier1 = resolveSenderTier("unknown", "TheBtf", baseConfig);
+      const tier1 = resolveSenderTier("unknown", "Owner-User", baseConfig);
       expect(tier1).toBe(SenderTier.OWNER);
       const tier2 = resolveSenderTier("unknown", "ALICE", baseConfig);
       expect(tier2).toBe(SenderTier.MEMBER);
@@ -230,10 +230,10 @@ describe("Heimdall Full Pipeline Integration", () => {
     it("audit logger created successfully", () => {
       const logger = createHeimdallAuditLogger(baseConfig.audit);
       expect(logger).toBeDefined();
-      expect(logger.logToolBlocked).toBeInstanceOf(Function);
-      expect(logger.logRedaction).toBeInstanceOf(Function);
-      expect(logger.logRateLimit).toBeInstanceOf(Function);
-      expect(logger.logSanitization).toBeInstanceOf(Function);
+      expect(typeof logger.logToolBlocked).toBe("function");
+      expect(typeof logger.logRedaction).toBe("function");
+      expect(typeof logger.logRateLimit).toBe("function");
+      expect(typeof logger.logSanitization).toBe("function");
     });
   });
 });

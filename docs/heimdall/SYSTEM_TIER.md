@@ -284,13 +284,13 @@ export type EmbeddedRunAttemptParams = {
 
 ```typescript
 // User in owners list
-config.agents.defaults.heimdall.senderTiers.owners = [111, "thebtf"];
+config.agents.defaults.heimdall.senderTiers.owners = [123456, "alice"];
 
 // OWNER credentials + internal flag
 const tools = createOpenClawCodingTools({
   config,
   senderId: 111, // In owners list
-  senderUsername: "thebtf",
+  senderUsername: "alice",
   internal: true, // ← Overrides OWNER resolution
 });
 
@@ -306,7 +306,7 @@ const tools = createOpenClawCodingTools({
 const tools = createOpenClawCodingTools({
   config,
   senderId: 111,
-  senderUsername: "thebtf",
+  senderUsername: "alice",
   internal: false, // ← Explicit: use normal tier resolution
 });
 
@@ -582,5 +582,5 @@ grep '"senderTier":"system"' ~/.openclaw/logs/heimdall-audit.jsonl | \
 ---
 
 **Implementation:** Phase 1-2 (February 2026)
-**Author:** thebtf
+**Author:** openclaw contributor
 **Co-Authored-By:** Claude Sonnet 4.5

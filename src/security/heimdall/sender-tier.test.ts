@@ -138,9 +138,9 @@ describe("resolveSenderTier", () => {
 
   it("resolves SYSTEM even when sender is in owners list (isTrustedInternal takes precedence)", () => {
     const result = resolveSenderTier(
-      281043,
+      123456,
       "admin",
-      { senderTiers: { owners: [281043] } },
+      { senderTiers: { owners: [123456] } },
       undefined,
       true, // isTrustedInternal
     );

@@ -20,7 +20,7 @@ describe("Heimdall GATE in pi-tools", () => {
   const heimdallConfig: HeimdallConfig = {
     enabled: true,
     senderTiers: {
-      owners: [111, "thebtf"],
+      owners: [111, "owner-user"],
       members: [222, "alice"],
     },
     defaultGuestPolicy: "deny",
