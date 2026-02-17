@@ -487,14 +487,14 @@ export async function runAgentTurnWithFallback(params: {
         }
       }
 
-      // Auto-recover from Gemini INVALID_ARGUMENT (likely corrupted session)
+      // Auto-recover from Gemini INVALID_ARGUMENT when likely session corruption
       if (isGeminiInvalidArgument) {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
         if (didReset) {
           return {
             kind: "final",
             payload: {
-              text: "⚠️ The API rejected the request (likely a corrupted session). I've reset the conversation - please try again.",
+              text: "⚠️ Gemini rejected the request (invalid argument). I've reset the conversation - please try again.",
             },
           };
         }
