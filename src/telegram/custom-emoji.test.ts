@@ -113,9 +113,10 @@ describe("resolveCustomEmojiAnnotations", () => {
 
     expect(result.annotatedText).toBe("Hello ⭐[emoji: a sparkling star] world");
     expect(result.annotations).toHaveLength(1);
-    expect(result.annotations[0]!.description).toBe("a sparkling star");
+    expect(result.annotations[0].description).toBe("a sparkling star");
     // Should not call bot API since it was cached
-    expect(bot.api.getCustomEmojiStickers as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(bot.api.getCustomEmojiStickers).not.toHaveBeenCalled();
   });
 
   it("fetches and caches uncached custom emoji", async () => {
