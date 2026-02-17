@@ -332,7 +332,6 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   });
 
   // Kill all running exec sessions for this session
-  let killedProcesses = 0;
   const targetKey = abortTarget.key ?? params.sessionKey;
   if (targetKey) {
     const runningSessions = listAllRunningSessions();
@@ -341,7 +340,6 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
         if (session.pid) {
           killProcessTree(session.pid);
         }
-        killedProcesses++;
         logVerbose(`stop: killed exec session ${session.id} (pid=${session.pid})`);
       }
     }
