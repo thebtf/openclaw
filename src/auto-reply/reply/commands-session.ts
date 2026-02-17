@@ -381,10 +381,6 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });
 
-  if (killedProcesses > 0) {
-    logVerbose(`stop: total killed processes=${killedProcesses}`);
-  }
-
   return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
 };
 

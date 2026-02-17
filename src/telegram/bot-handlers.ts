@@ -668,7 +668,7 @@ export const registerTelegramHandlers = ({
       return;
     }
 
-    const allMedia = media
+    const allMedia: TelegramMediaRef[] = media?.path
       ? [
           {
             path: media.path,
