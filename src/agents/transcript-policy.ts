@@ -31,6 +31,7 @@ const MISTRAL_MODEL_HINTS = [
   "ministral",
   "mistralai",
 ];
+const MINIMAX_MODEL_HINTS = ["minimax"];
 const OPENAI_MODEL_APIS = new Set([
   "openai",
   "openai-completions",
@@ -75,6 +76,18 @@ function isMistralModel(params: { provider?: string | null; modelId?: string | n
   return MISTRAL_MODEL_HINTS.some((hint) => modelId.includes(hint));
 }
 
+function isMinimaxModel(params: { provider?: string | null; modelId?: string | null }): boolean {
+  const provider = normalizeProviderId(params.provider ?? "");
+  if (provider === "minimax" || provider === "minimax-cn") {
+    return true;
+  }
+  const modelId = (params.modelId ?? "").toLowerCase();
+  if (!modelId) {
+    return false;
+  }
+  return MINIMAX_MODEL_HINTS.some((hint) => modelId.includes(hint));
+}
+
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -90,6 +103,7 @@ export function resolveTranscriptPolicy(params: {
     !isOpenAi &&
     !OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS.has(provider);
   const isMistral = isMistralModel({ provider, modelId });
+  const isMinimax = isMinimaxModel({ provider, modelId });
   const isOpenRouterGemini =
     (provider === "openrouter" || provider === "opencode" || provider === "kilocode") &&
     modelId.toLowerCase().includes("gemini");
@@ -130,6 +144,6 @@ export function resolveTranscriptPolicy(params: {
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
-    allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
+    allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic || isMinimax),
   };
 }
