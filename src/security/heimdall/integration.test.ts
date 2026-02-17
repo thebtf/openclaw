@@ -26,7 +26,7 @@ describe("Heimdall Full Pipeline Integration", () => {
   const baseConfig: HeimdallConfig = {
     enabled: true,
     senderTiers: {
-      owners: [111, "owner-user"],
+      owners: [111, "thebtf"],
       members: [222, "alice"],
     },
     defaultGuestPolicy: "deny",
@@ -219,7 +219,7 @@ describe("Heimdall Full Pipeline Integration", () => {
     });
 
     it("username resolution works case-insensitively", () => {
-      const tier1 = resolveSenderTier("unknown", "Owner-User", baseConfig);
+      const tier1 = resolveSenderTier("unknown", "TheBtf", baseConfig);
       expect(tier1).toBe(SenderTier.OWNER);
       const tier2 = resolveSenderTier("unknown", "ALICE", baseConfig);
       expect(tier2).toBe(SenderTier.MEMBER);

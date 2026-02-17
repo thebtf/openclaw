@@ -15,7 +15,7 @@ describe("pi-tools internal flag integration", () => {
         heimdall: {
           enabled: true,
           senderTiers: {
-            owners: [111, "alice"],
+            owners: [111, "thebtf"],
             members: [222],
           },
         },
@@ -44,7 +44,7 @@ describe("pi-tools internal flag integration", () => {
       config: heimdallConfig,
       internal: false,
       senderId: 111,
-      senderUsername: "alice",
+      senderUsername: "thebtf",
     });
 
     // Should resolve to OWNER tier (senderId in owners list)
@@ -69,7 +69,7 @@ describe("pi-tools internal flag integration", () => {
       config: heimdallConfig,
       internal: true,
       senderId: 111,
-      senderUsername: "alice",
+      senderUsername: "thebtf",
     });
 
     // SYSTEM tier is less privileged than OWNER
@@ -119,7 +119,7 @@ describe("pi-tools internal flag integration", () => {
       senderIsOwner: true,
       internal: false,
       senderId: 111, // in owners list
-      senderUsername: "alice",
+      senderUsername: "thebtf",
     });
 
     // SYSTEM should have same or fewer tools than OWNER

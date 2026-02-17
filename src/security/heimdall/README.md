@@ -152,7 +152,7 @@ To allow additional tools, add custom `toolACL` entry:
       "heimdall": {
         "enabled": true,
         "senderTiers": {
-          "owners": [111, "alice"],
+          "owners": [111, "thebtf"],
           "members": [222, "alice"]
         },
         "defaultGuestPolicy": "read-only",
@@ -625,5 +625,5 @@ Return to Agent
 
 **Version:** 2026.2.12
 **Implementation:** Phase 1-3 complete
-**Author:** alice
+**Author:** thebtf
 **Co-Authored-By:** Claude Sonnet 4.5

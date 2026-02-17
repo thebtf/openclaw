@@ -14,7 +14,7 @@ describe("SecurityContext propagation", () => {
   const config: HeimdallConfig = {
     enabled: true,
     senderTiers: {
-      owners: [111, "alice"],
+      owners: [111, "thebtf"],
       members: [222],
     },
   };
@@ -66,13 +66,13 @@ describe("SecurityContext propagation", () => {
 
   it("isTrustedInternal=true overrides owner status (SYSTEM has priority)", () => {
     // Even if senderId is in owners list, isTrustedInternal takes precedence
-    const tier = resolveSenderTier(111, "alice", config, undefined, true);
+    const tier = resolveSenderTier(111, "thebtf", config, undefined, true);
     expect(tier).toBe(SenderTier.SYSTEM);
   });
 
   it("isTrustedInternal=false → normal tier resolution (no SYSTEM)", () => {
     // Explicit false should not trigger SYSTEM tier
-    const tier = resolveSenderTier(111, "alice", config, undefined, false);
+    const tier = resolveSenderTier(111, "thebtf", config, undefined, false);
     expect(tier).toBe(SenderTier.OWNER);
   });
 
