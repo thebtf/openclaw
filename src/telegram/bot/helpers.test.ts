@@ -43,19 +43,18 @@ describe("buildTelegramThreadParams", () => {
     });
   });
 
-  it("includes thread id for dm threads (Bot API 7.0+ supports reply-threads in DMs)", () => {
+  it("includes thread id for dm topics", () => {
     expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toEqual({
       message_thread_id: 1,
     });
     expect(buildTelegramThreadParams({ id: 2, scope: "dm" })).toEqual({
       message_thread_id: 2,
     });
-    expect(buildTelegramThreadParams({ id: 12345, scope: "dm" })).toEqual({
-      message_thread_id: 12345,
-    });
   });
 
-  it("normalizes dm thread ids to integers", () => {
+  it("normalizes dm thread ids and skips non-positive values", () => {
+    expect(buildTelegramThreadParams({ id: 0, scope: "dm" })).toBeUndefined();
+    expect(buildTelegramThreadParams({ id: -1, scope: "dm" })).toBeUndefined();
     expect(buildTelegramThreadParams({ id: 1.9, scope: "dm" })).toEqual({
       message_thread_id: 1,
     });

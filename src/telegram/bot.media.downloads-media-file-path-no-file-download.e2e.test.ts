@@ -36,7 +36,7 @@ async function createBotHandlerWithOptions(options: {
 }> {
   const { createTelegramBot } = await import("./bot.js");
   const replyModule = await import("../auto-reply/reply.js");
-  const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+  const replySpy = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
 
   onSpy.mockReset();
   replySpy.mockReset();
@@ -49,8 +49,8 @@ async function createBotHandlerWithOptions(options: {
     testTimings: TELEGRAM_TEST_TIMINGS,
     ...(options.proxyFetch ? { proxyFetch: options.proxyFetch } : {}),
     runtime: {
-      log: runtimeLog,
-      error: runtimeError,
+      log: runtimeLog as (...data: unknown[]) => void,
+      error: runtimeError as (...data: unknown[]) => void,
       exit: () => {
         throw new Error("exit");
       },
@@ -67,23 +67,23 @@ function mockTelegramFileDownload(params: {
   contentType: string;
   bytes: Uint8Array;
 }): ReturnType<typeof vi.spyOn> {
-  return vi.spyOn(globalThis, "fetch" as never).mockResolvedValueOnce({
+  return vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
     ok: true,
     status: 200,
     statusText: "OK",
     headers: { get: () => params.contentType },
     arrayBuffer: async () => params.bytes.buffer,
-  } as Response);
+  } as unknown as Response);
 }
 
 function mockTelegramPngDownload(): ReturnType<typeof vi.spyOn> {
-  return vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
+  return vi.spyOn(globalThis, "fetch").mockResolvedValue({
     ok: true,
     status: 200,
     statusText: "OK",
     headers: { get: () => "image/png" },
     arrayBuffer: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
-  } as Response);
+  } as unknown as Response);
 }
 
 beforeEach(() => {
@@ -150,7 +150,7 @@ describe("telegram inbound media", () => {
   it("prefers proxyFetch over global fetch", async () => {
     const runtimeLog = vi.fn();
     const runtimeError = vi.fn();
-    const globalFetchSpy = vi.spyOn(globalThis, "fetch" as never).mockImplementation(() => {
+    const globalFetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       throw new Error("global fetch should not be called");
     });
     const proxyFetch = vi.fn().mockResolvedValueOnce({
@@ -159,7 +159,7 @@ describe("telegram inbound media", () => {
       statusText: "OK",
       headers: { get: () => "image/jpeg" },
       arrayBuffer: async () => new Uint8Array([0xff, 0xd8, 0xff]).buffer,
-    } as Response);
+    } as unknown as Response);
 
     const { handler } = await createBotHandlerWithOptions({
       proxyFetch: proxyFetch as unknown as typeof fetch,
@@ -193,7 +193,7 @@ describe("telegram inbound media", () => {
       runtimeLog,
       runtimeError,
     });
-    const fetchSpy = vi.spyOn(globalThis, "fetch" as never);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
 
     await handler({
       message: {
@@ -388,13 +388,13 @@ describe("telegram stickers", () => {
         cachedAt: "2026-01-20T10:00:00.000Z",
       });
 
-      const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValueOnce({
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
         ok: true,
         status: 200,
         statusText: "OK",
         headers: { get: () => "image/webp" },
         arrayBuffer: async () => new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer,
-      } as Response);
+      } as unknown as Response);
 
       await handler({
         message: {
@@ -438,7 +438,7 @@ describe("telegram stickers", () => {
     "skips animated stickers (TGS format)",
     async () => {
       const { handler, replySpy, runtimeError } = await createBotHandler();
-      const fetchSpy = vi.spyOn(globalThis, "fetch" as never);
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
 
       await handler({
         message: {
@@ -476,7 +476,7 @@ describe("telegram stickers", () => {
     "skips video stickers (WEBM format)",
     async () => {
       const { handler, replySpy, runtimeError } = await createBotHandler();
-      const fetchSpy = vi.spyOn(globalThis, "fetch" as never);
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
 
       await handler({
         message: {
@@ -523,7 +523,8 @@ describe("telegram text fragments", () => {
     async () => {
       const { createTelegramBot } = await import("./bot.js");
       const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+      const replySpy = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> })
+        .__replySpy;
 
       onSpy.mockReset();
       replySpy.mockReset();
