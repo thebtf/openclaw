@@ -4,6 +4,24 @@ const TIMEOUT_HINT_RE =
   /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
+/** Node.js and undici error codes that indicate network-level failures. */
+const NETWORK_ERROR_CODES = new Set([
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ENOTFOUND",
+  "ECONNREFUSED",
+  "EPIPE",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ERR_STREAM_PREMATURE_CLOSE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+]);
+
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
   readonly provider?: string;
@@ -166,8 +184,15 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
+  if (code && NETWORK_ERROR_CODES.has(code)) {
     return "timeout";
+  }
+  // Walk cause chain for wrapped errors (e.g. TypeError: fetch failed → cause.code)
+  if (!code && err instanceof Error && err.cause && typeof err.cause === "object") {
+    const causeCode = (err.cause as { code?: unknown }).code;
+    if (typeof causeCode === "string" && NETWORK_ERROR_CODES.has(causeCode.toUpperCase())) {
+      return "timeout";
+    }
   }
   if (isTimeoutError(err)) {
     return "timeout";

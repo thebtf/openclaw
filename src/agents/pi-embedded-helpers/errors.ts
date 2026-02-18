@@ -621,6 +621,11 @@ const ERROR_PATTERNS = {
     /\bstop reason:\s*abort\b/i,
     /\breason:\s*abort\b/i,
     /\bunhandled stop reason:\s*abort\b/i,
+    /\bfetch failed\b/i,
+    "network error",
+    "socket hang up",
+    "stream disconnect",
+    /\bconnect(?:ion)?\s+refused\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
@@ -646,6 +651,8 @@ const ERROR_PATTERNS = {
     /\b403\b/,
     "no credentials found",
     "no api key found",
+    /\bauth[_ ]unavailable\b/i,
+    "no auth available",
   ],
   format: [
     "string should match pattern",
@@ -788,13 +795,57 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
-export function classifyFailoverReason(raw: string): FailoverReason | null {
-  if (isImageDimensionErrorMessage(raw)) {
+/**
+ * Map of gRPC status strings to HTTP status codes.
+ * Used to classify JSON-wrapped errors from providers like Google/Gemini
+ * that return gRPC-style status codes in their error payloads.
+ */
+const GRPC_STATUS_TO_HTTP: Record<string, number> = {
+  UNAVAILABLE: 503,
+  INTERNAL: 500,
+  RESOURCE_EXHAUSTED: 429,
+  PERMISSION_DENIED: 403,
+  UNAUTHENTICATED: 401,
+  DEADLINE_EXCEEDED: 408,
+};
+
+/**
+ * Try to extract a numeric HTTP status code from a JSON-wrapped error payload.
+ * Handles formats like:
+ *   {"error":{"code":503,"message":"...","status":"UNAVAILABLE"}}
+ *   {"code":429,"message":"..."}
+ * Returns null if the string is not JSON or contains no recognizable status code.
+ */
+function tryExtractNumericHttpCode(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) {
     return null;
   }
-  if (isImageSizeError(raw)) {
-    return null;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const errorObj = parsed?.error as Record<string, unknown> | undefined;
+    const code = errorObj?.code ?? parsed?.code;
+    if (typeof code === "number" && code >= 400 && code < 600) {
+      return code;
+    }
+    if (typeof code === "string" && /^\d{3}$/.test(code.trim())) {
+      const numCode = Number(code.trim());
+      if (numCode >= 400 && numCode < 600) {
+        return numCode;
+      }
+    }
+    const status = errorObj?.status ?? parsed?.status;
+    if (typeof status === "string") {
+      return GRPC_STATUS_TO_HTTP[status.toUpperCase()] ?? null;
+    }
+  } catch {
+    // Not valid JSON — fall through
   }
+  return null;
+}
+
+/** Core text-based classification — no JSON unwrapping. */
+function classifyFailoverReasonFromText(raw: string): FailoverReason | null {
   if (isTransientHttpError(raw)) {
     // Treat transient 5xx provider failures as retryable transport issues.
     return "timeout";
@@ -817,6 +868,49 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isAuthErrorMessage(raw)) {
     return "auth";
   }
+  return null;
+}
+
+export function classifyFailoverReason(raw: string): FailoverReason | null {
+  if (isImageDimensionErrorMessage(raw)) {
+    return null;
+  }
+  if (isImageSizeError(raw)) {
+    return null;
+  }
+
+  // First pass: try text-based classification on the raw string.
+  const textResult = classifyFailoverReasonFromText(raw);
+  if (textResult) {
+    return textResult;
+  }
+
+  // Second pass: if raw looks like a JSON error payload, try to classify by
+  // embedded HTTP/gRPC status code and by the inner message text.
+  const numericCode = tryExtractNumericHttpCode(raw);
+  if (numericCode) {
+    if (TRANSIENT_HTTP_ERROR_CODES.has(numericCode)) {
+      return "timeout";
+    }
+    if (numericCode === 429) {
+      return "rate_limit";
+    }
+    if (numericCode === 401 || numericCode === 403) {
+      return "auth";
+    }
+    if (numericCode === 402) {
+      return "billing";
+    }
+    if (numericCode === 408) {
+      return "timeout";
+    }
+  }
+
+  const apiInfo = parseApiErrorInfo(raw);
+  if (apiInfo?.message) {
+    return classifyFailoverReasonFromText(apiInfo.message);
+  }
+
   return null;
 }
 

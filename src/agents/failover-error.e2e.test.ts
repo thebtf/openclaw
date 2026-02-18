@@ -70,4 +70,23 @@ describe("failover-error", () => {
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
   });
+
+  it("infers timeout from expanded network error codes", () => {
+    expect(resolveFailoverReasonFromError({ code: "ENOTFOUND" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ECONNREFUSED" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "UND_ERR_CONNECT_TIMEOUT" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "UND_ERR_HEADERS_TIMEOUT" })).toBe("timeout");
+  });
+
+  it("walks cause chain to find network error codes", () => {
+    const inner = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const outer = new TypeError("fetch failed", { cause: inner });
+    expect(resolveFailoverReasonFromError(outer)).toBe("timeout");
+  });
+
+  it("classifies fetch failed message via text patterns", () => {
+    expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "auth_unavailable: no auth" })).toBe("auth");
+  });
 });

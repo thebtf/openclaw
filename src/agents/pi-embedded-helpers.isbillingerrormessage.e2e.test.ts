@@ -357,4 +357,76 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
+
+  it("classifies Node.js fetch/network errors as timeout", () => {
+    expect(classifyFailoverReason("fetch failed")).toBe("timeout");
+    expect(classifyFailoverReason("TypeError: fetch failed")).toBe("timeout");
+    expect(classifyFailoverReason("network error")).toBe("timeout");
+    expect(classifyFailoverReason("socket hang up")).toBe("timeout");
+    expect(classifyFailoverReason("stream disconnect")).toBe("timeout");
+    expect(classifyFailoverReason("connection refused")).toBe("timeout");
+  });
+
+  it("classifies proxy auth errors as auth", () => {
+    expect(classifyFailoverReason("auth_unavailable: no auth available")).toBe("auth");
+    expect(classifyFailoverReason("auth unavailable")).toBe("auth");
+    expect(classifyFailoverReason("no auth available")).toBe("auth");
+  });
+
+  it("classifies JSON-wrapped errors by numeric HTTP code", () => {
+    // "overloaded" in message text matches isOverloadedErrorMessage → rate_limit (correct: cooldown)
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":503,"message":"The model is overloaded.","status":"UNAVAILABLE"}}',
+      ),
+    ).toBe("rate_limit");
+    // Pure 503 without "overloaded" keyword → classified by numeric code as timeout
+    expect(classifyFailoverReason('{"error":{"code":503,"message":"service unavailable"}}')).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason('{"error":{"code":500,"message":"internal error"}}')).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason('{"error":{"code":429,"message":"rate limited"}}')).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReason('{"error":{"code":401,"message":"invalid key"}}')).toBe("auth");
+    expect(classifyFailoverReason('{"error":{"code":402,"message":"payment required"}}')).toBe(
+      "billing",
+    );
+  });
+
+  it("classifies JSON-wrapped errors by gRPC status string", () => {
+    expect(classifyFailoverReason('{"error":{"status":"UNAVAILABLE","message":"try again"}}')).toBe(
+      "timeout",
+    );
+    expect(
+      classifyFailoverReason('{"error":{"status":"RESOURCE_EXHAUSTED","message":"quota"}}'),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason('{"error":{"status":"UNAUTHENTICATED","message":"bad token"}}'),
+    ).toBe("auth");
+  });
+
+  it("classifies JSON-wrapped errors by inner message text", () => {
+    expect(
+      classifyFailoverReason(
+        '{"error":{"message":"auth_unavailable: no auth available","type":"proxy_error"}}',
+      ),
+    ).toBe("auth");
+  });
+
+  it("classifies JSON-wrapped errors with string codes", () => {
+    expect(classifyFailoverReason('{"error":{"code":"429","message":"quota exceeded"}}')).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReason('{"error":{"code":"503","message":"service unavailable"}}')).toBe(
+      "timeout",
+    );
+  });
+
+  it("does NOT classify HTTP 400 JSON errors (too generic)", () => {
+    expect(classifyFailoverReason('{"error":{"code":400,"message":"bad request"}}')).toBeNull();
+    expect(classifyFailoverReason('{"error":{"code":"400","message":"bad request"}}')).toBeNull();
+  });
 });
