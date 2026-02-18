@@ -263,12 +263,12 @@ describe("isTransientHttpError", () => {
     expect(isTransientHttpError("500 Internal Server Error")).toBe(true);
     expect(isTransientHttpError("502 Bad Gateway")).toBe(true);
     expect(isTransientHttpError("503 Service Unavailable")).toBe(true);
+    expect(isTransientHttpError("504 Gateway Timeout")).toBe(true);
     expect(isTransientHttpError("521 <!DOCTYPE html><html></html>")).toBe(true);
     expect(isTransientHttpError("529 Overloaded")).toBe(true);
   });
 
   it("returns false for non-retryable or non-http text", () => {
-    expect(isTransientHttpError("504 Gateway Timeout")).toBe(false);
     expect(isTransientHttpError("429 Too Many Requests")).toBe(false);
     expect(isTransientHttpError("network timeout")).toBe(false);
   });
@@ -428,5 +428,59 @@ describe("classifyFailoverReason", () => {
   it("does NOT classify HTTP 400 JSON errors (too generic)", () => {
     expect(classifyFailoverReason('{"error":{"code":400,"message":"bad request"}}')).toBeNull();
     expect(classifyFailoverReason('{"error":{"code":"400","message":"bad request"}}')).toBeNull();
+  });
+
+  it("classifies OpenAI-compatible string error codes", () => {
+    // CLIProxyAPI / OpenAI format: code is a string like "internal_server_error"
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":"internal_server_error","type":"server_error","message":"EOF"}}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason('{"error":{"code":"rate_limit_error","message":"too many requests"}}'),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason('{"error":{"code":"authentication_error","message":"invalid key"}}'),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason('{"error":{"code":"insufficient_quota","message":"exceeded quota"}}'),
+    ).toBe("billing");
+  });
+
+  it("classifies by OpenAI-compatible type field when code is absent", () => {
+    expect(
+      classifyFailoverReason('{"error":{"type":"server_error","message":"unknown error"}}'),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason('{"error":{"type":"rate_limit_error","message":"slow down"}}'),
+    ).toBe("rate_limit");
+  });
+
+  it("handles whitespace and casing in type field", () => {
+    expect(classifyFailoverReason('{"error":{"type":" Server_Error ","message":"x"}}')).toBe(
+      "timeout",
+    );
+  });
+
+  it("classifies 504 Gateway Timeout as transient", () => {
+    expect(classifyFailoverReason('{"error":{"code":504,"message":"gateway timeout"}}')).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason('{"error":{"code":"504","message":"gateway timeout"}}')).toBe(
+      "timeout",
+    );
+  });
+
+  it("classifies Gemini EOF error from CLIProxyAPI", () => {
+    const geminiEof = JSON.stringify({
+      error: {
+        message:
+          'Post "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent": EOF',
+        type: "server_error",
+        code: "internal_server_error",
+      },
+    });
+    expect(classifyFailoverReason(geminiEof)).toBe("timeout");
   });
 });

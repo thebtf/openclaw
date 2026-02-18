@@ -182,6 +182,9 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (status === 400) {
     return "format";
   }
+  if (status && status >= 500 && status < 600) {
+    return "timeout";
+  }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
   if (code && NETWORK_ERROR_CODES.has(code)) {

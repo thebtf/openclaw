@@ -113,7 +113,7 @@ const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
-const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 521, 522, 523, 524, 529]);
+const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 504, 521, 522, 523, 524, 529]);
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -810,9 +810,28 @@ const GRPC_STATUS_TO_HTTP: Record<string, number> = {
 };
 
 /**
+ * Map of OpenAI-compatible string error codes/types to HTTP status codes.
+ * Used by CLIProxyAPI and other OpenAI-compatible APIs that return string
+ * codes like "internal_server_error" or type fields like "server_error".
+ */
+const OPENAI_STRING_CODE_TO_HTTP: Record<string, number> = {
+  server_error: 500,
+  internal_server_error: 500,
+  api_error: 500,
+  rate_limit_error: 429,
+  rate_limit_exceeded: 429,
+  insufficient_quota: 402,
+  authentication_error: 401,
+  permission_error: 403,
+  invalid_request_error: 400,
+  not_found_error: 404,
+};
+
+/**
  * Try to extract a numeric HTTP status code from a JSON-wrapped error payload.
  * Handles formats like:
  *   {"error":{"code":503,"message":"...","status":"UNAVAILABLE"}}
+ *   {"error":{"code":"internal_server_error","type":"server_error"}}
  *   {"code":429,"message":"..."}
  * Returns null if the string is not JSON or contains no recognizable status code.
  */
@@ -828,15 +847,29 @@ function tryExtractNumericHttpCode(raw: string): number | null {
     if (typeof code === "number" && code >= 400 && code < 600) {
       return code;
     }
-    if (typeof code === "string" && /^\d{3}$/.test(code.trim())) {
-      const numCode = Number(code.trim());
-      if (numCode >= 400 && numCode < 600) {
-        return numCode;
+    if (typeof code === "string") {
+      const trimmedCode = code.trim();
+      if (/^\d{3}$/.test(trimmedCode)) {
+        const numCode = Number(trimmedCode);
+        if (numCode >= 400 && numCode < 600) {
+          return numCode;
+        }
+      }
+      // OpenAI-compatible string codes: "internal_server_error", "rate_limit_error", etc.
+      const mapped = OPENAI_STRING_CODE_TO_HTTP[trimmedCode.toLowerCase()];
+      if (mapped) {
+        return mapped;
       }
     }
+    // gRPC status strings: "UNAVAILABLE", "RESOURCE_EXHAUSTED", etc.
     const status = errorObj?.status ?? parsed?.status;
     if (typeof status === "string") {
       return GRPC_STATUS_TO_HTTP[status.toUpperCase()] ?? null;
+    }
+    // OpenAI-compatible type field: "server_error", "rate_limit_error", etc.
+    const type = errorObj?.type ?? parsed?.type;
+    if (typeof type === "string") {
+      return OPENAI_STRING_CODE_TO_HTTP[type.trim().toLowerCase()] ?? null;
     }
   } catch {
     // Not valid JSON — fall through
