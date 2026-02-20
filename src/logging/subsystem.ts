@@ -1,6 +1,5 @@
 import type { Logger as TsLogger } from "tslog";
 import { Chalk } from "chalk";
-import { inspect } from "node:util";
 import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
 import { isVerbose } from "../globals.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -36,6 +35,39 @@ function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boo
 
 type ChalkInstance = InstanceType<typeof Chalk>;
 
+const inspectValue: ((value: unknown) => string) | null = (() => {
+  const getBuiltinModule = (
+    process as NodeJS.Process & {
+      getBuiltinModule?: (id: string) => unknown;
+    }
+  ).getBuiltinModule;
+  if (typeof getBuiltinModule !== "function") {
+    return null;
+  }
+  try {
+    const utilNamespace = getBuiltinModule("util") as {
+      inspect?: (value: unknown) => string;
+    };
+    return typeof utilNamespace.inspect === "function" ? utilNamespace.inspect : null;
+  } catch {
+    return null;
+  }
+})();
+
+function formatRuntimeArg(arg: unknown): string {
+  if (typeof arg === "string") {
+    return arg;
+  }
+  if (inspectValue) {
+    return inspectValue(arg);
+  }
+  try {
+    return JSON.stringify(arg);
+  } catch {
+    return String(arg);
+  }
+}
+
 function isRichConsoleEnv(): boolean {
   const term = (process.env.TERM ?? "").toLowerCase();
   if (process.env.COLORTERM || process.env.TERM_PROGRAM) {
@@ -62,10 +94,7 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number
 };
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
-let _channelSubsystemPrefixes: Set<string> | undefined;
-function getChannelSubsystemPrefixes(): Set<string> {
-  return (_channelSubsystemPrefixes ??= new Set<string>(CHAT_CHANNEL_ORDER));
-}
+const CHANNEL_SUBSYSTEM_PREFIXES = new Set<string>(CHAT_CHANNEL_ORDER);
 
 function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInstance {
   const override = SUBSYSTEM_COLOR_OVERRIDES[subsystem];
@@ -93,7 +122,7 @@ function formatSubsystemForConsole(subsystem: string): string {
   if (parts.length === 0) {
     return original;
   }
-  if (getChannelSubsystemPrefixes().has(parts[0])) {
+  if (CHANNEL_SUBSYSTEM_PREFIXES.has(parts[0])) {
     return parts[0];
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
@@ -326,7 +355,7 @@ export function runtimeForLogger(
 ): RuntimeEnv {
   const formatArgs = (...args: unknown[]) =>
     args
-      .map((arg) => (typeof arg === "string" ? arg : inspect(arg)))
+      .map((arg) => formatRuntimeArg(arg))
       .join(" ")
       .trim();
   return {

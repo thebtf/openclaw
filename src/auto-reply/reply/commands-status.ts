@@ -22,6 +22,7 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import { normalizeGroupActivation } from "../group-activation.js";
+import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
@@ -136,6 +137,25 @@ export async function buildStatusReply(params: {
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
+  const modelRefs = resolveSelectedAndActiveModel({
+    selectedProvider: provider,
+    selectedModel: model,
+    sessionEntry,
+  });
+  const selectedModelAuth = resolveModelAuthLabel({
+    provider,
+    cfg,
+    sessionEntry,
+    agentDir: statusAgentDir,
+  });
+  const activeModelAuth = modelRefs.activeDiffers
+    ? resolveModelAuthLabel({
+        provider: modelRefs.active.provider,
+        cfg,
+        sessionEntry,
+        agentDir: statusAgentDir,
+      })
+    : selectedModelAuth;
   const agentDefaults = cfg.agents?.defaults ?? {};
   const statusText = buildStatusMessage({
     config: cfg,
@@ -160,12 +180,8 @@ export async function buildStatusReply(params: {
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,
-    modelAuth: resolveModelAuthLabel({
-      provider,
-      cfg,
-      sessionEntry,
-      agentDir: statusAgentDir,
-    }),
+    modelAuth: selectedModelAuth,
+    activeModelAuth,
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,

@@ -3,6 +3,7 @@ import type { CommandHandler } from "./commands-types.js";
 import { listAllRunningSessions } from "../../agents/bash-process-registry.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import { killProcessTree } from "../../agents/shell-utils.js";
+import { isRestartEnabled } from "../../config/commands.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -15,24 +16,11 @@ import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js"
 import {
   formatAbortReplyText,
   isAbortTrigger,
+  resolveSessionEntryForKey,
   setAbortMemory,
   stopSubagentsForRequester,
 } from "./abort.js";
 import { clearSessionQueues } from "./queue.js";
-
-function resolveSessionEntryForKey(
-  store: Record<string, SessionEntry> | undefined,
-  sessionKey: string | undefined,
-) {
-  if (!store || !sessionKey) {
-    return {};
-  }
-  const direct = store[sessionKey];
-  if (direct) {
-    return { entry: direct, key: sessionKey };
-  }
-  return {};
-}
 
 function resolveAbortTarget(params: {
   ctx: { CommandTargetSessionKey?: string | null };
@@ -79,6 +67,20 @@ async function applyAbortTarget(params: {
   }
 }
 
+async function persistSessionEntry(params: Parameters<CommandHandler>[0]): Promise<boolean> {
+  if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
+    return false;
+  }
+  params.sessionEntry.updatedAt = Date.now();
+  params.sessionStore[params.sessionKey] = params.sessionEntry;
+  if (params.storePath) {
+    await updateSessionStore(params.storePath, (store) => {
+      store[params.sessionKey] = params.sessionEntry as SessionEntry;
+    });
+  }
+  return true;
+}
+
 export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -108,13 +110,7 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
     params.sessionEntry.groupActivation = activationCommand.mode;
     params.sessionEntry.groupActivationNeedsSystemIntro = true;
-    params.sessionEntry.updatedAt = Date.now();
-    params.sessionStore[params.sessionKey] = params.sessionEntry;
-    if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[params.sessionKey] = params.sessionEntry as SessionEntry;
-      });
-    }
+    await persistSessionEntry(params);
   }
   return {
     shouldContinue: false,
@@ -150,13 +146,7 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
     } else {
       params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
     }
-    params.sessionEntry.updatedAt = Date.now();
-    params.sessionStore[params.sessionKey] = params.sessionEntry;
-    if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[params.sessionKey] = params.sessionEntry as SessionEntry;
-      });
-    }
+    await persistSessionEntry(params);
   }
   const label =
     sendPolicyCommand.mode === "inherit"
@@ -195,7 +185,10 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       agentId: params.agentId,
     });
-    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
+    const summary = await loadCostUsageSummary({
+      days: 30,
+      config: params.cfg,
+    });
 
     const sessionCost = formatUsd(sessionSummary?.totalCost);
     const sessionTokens = sessionSummary?.totalTokens
@@ -222,7 +215,9 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
     return {
       shouldContinue: false,
-      reply: { text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}` },
+      reply: {
+        text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}`,
+      },
     };
   }
 
@@ -245,13 +240,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     } else {
       params.sessionEntry.responseUsage = next;
     }
-    params.sessionEntry.updatedAt = Date.now();
-    params.sessionStore[params.sessionKey] = params.sessionEntry;
-    if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[params.sessionKey] = params.sessionEntry as SessionEntry;
-      });
-    }
+    await persistSessionEntry(params);
   }
 
   return {
@@ -275,11 +264,11 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     );
     return { shouldContinue: false };
   }
-  if (params.cfg.commands?.restart !== true) {
+  if (!isRestartEnabled(params.cfg)) {
     return {
       shouldContinue: false,
       reply: {
-        text: "⚠️ /restart is disabled. Set commands.restart=true to enable.",
+        text: "⚠️ /restart is disabled (commands.restart=false).",
       },
     };
   }
@@ -381,7 +370,10 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });
 
-  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(stopped) },
+  };
 };
 
 export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {

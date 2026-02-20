@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { HeimdallSchema } from "../security/heimdall/config-schema.js";
+import { isSafeScpRemoteHost } from "../infra/scp-host.js";
+import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
 import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
@@ -142,7 +143,6 @@ export const TelegramAccountSchemaBase = z
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
-        editMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
       })
       .strict()
@@ -151,15 +151,8 @@ export const TelegramAccountSchemaBase = z
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     linkPreview: z.boolean().optional(),
-    stickerSetIndexing: z.boolean().optional(),
-    stickerSetIndexLimit: z.number().int().positive().optional(),
-    stickerCacheTtlDays: z.number().int().positive().optional(),
-    stickerCacheMaxEntries: z.number().int().positive().optional(),
-    customEmojiVision: z.boolean().optional(),
-    stickerVisionModel: z.string().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
-    heimdall: HeimdallSchema,
   })
   .strict();
 
@@ -555,6 +548,7 @@ export const SlackAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streaming: z.boolean().optional(),
     mediaMaxMb: z.number().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
@@ -812,7 +806,10 @@ export const IMessageAccountSchemaBase = z
     configWrites: z.boolean().optional(),
     cliPath: ExecutableTokenSchema.optional(),
     dbPath: z.string().optional(),
-    remoteHost: z.string().optional(),
+    remoteHost: z
+      .string()
+      .refine(isSafeScpRemoteHost, "expected SSH host or user@host (no spaces/options)")
+      .optional(),
     service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
@@ -823,6 +820,12 @@ export const IMessageAccountSchemaBase = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     includeAttachments: z.boolean().optional(),
+    attachmentRoots: z
+      .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
+      .optional(),
+    remoteAttachmentRoots: z
+      .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
+      .optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),

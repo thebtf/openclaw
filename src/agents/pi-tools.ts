@@ -7,14 +7,12 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
-import type { SenderTier } from "../security/heimdall/types.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
-import { resolveSenderTier } from "../security/heimdall/sender-tier.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -25,6 +23,7 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
+import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
@@ -181,6 +180,8 @@ export function createOpenClawCodingTools(options?: {
   modelProvider?: string;
   /** Model id for the current provider (used for model-specific tool gating). */
   modelId?: string;
+  /** Model context window in tokens (used to scale read-tool output budget). */
+  modelContextWindowTokens?: number;
   /**
    * Auth mode for the current provider. We only need this for Anthropic OAuth
    * tool-name blocking quirks.
@@ -212,19 +213,8 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
-  /**
-   * Whether the sender is an owner (required for owner-only tools).
-   * DEPRECATED: Use `internal` flag instead for new code.
-   * This property overrides `internal` flag for backward compatibility (Task 2.3 will remove this).
-   */
+  /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
-  /**
-   * If true, this call originates from trusted internal runtime (cron, CLI, heartbeat).
-   * Maps to `isTrustedInternal` for Heimdall SYSTEM tier resolution.
-   * When true AND Heimdall enabled, results in SYSTEM tier (limited privileges).
-   * Currently overridden by senderIsOwner for backward compatibility.
-   */
-  internal?: boolean;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -311,6 +301,7 @@ export function createOpenClawCodingTools(options?: {
   if (sandboxRoot && !sandboxFsBridge) {
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
+  const imageSanitization = resolveImageSanitizationLimits(options?.config);
 
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
@@ -318,11 +309,16 @@ export function createOpenClawCodingTools(options?: {
         const sandboxed = createSandboxedReadTool({
           root: sandboxRoot,
           bridge: sandboxFsBridge!,
+          modelContextWindowTokens: options?.modelContextWindowTokens,
+          imageSanitization,
         });
         return [workspaceOnly ? wrapToolWorkspaceRootGuard(sandboxed, sandboxRoot) : sandboxed];
       }
       const freshReadTool = createReadTool(workspaceRoot);
-      const wrapped = createOpenClawReadTool(freshReadTool);
+      const wrapped = createOpenClawReadTool(freshReadTool, {
+        modelContextWindowTokens: options?.modelContextWindowTokens,
+        imageSanitization,
+      });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     if (tool.name === "bash" || tool.name === execToolName) {
@@ -459,32 +455,12 @@ export function createOpenClawCodingTools(options?: {
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
       requesterAgentIdOverride: agentId,
+      requesterSenderId: options?.senderId,
+      senderIsOwner: options?.senderIsOwner,
     }),
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-
-  // Heimdall GATE: resolve sender tier for runtime tool ACL.
-  const heimdallCfg = options?.config?.agents?.defaults?.heimdall;
-  let senderTier: SenderTier | undefined;
-  if (heimdallCfg?.enabled) {
-    // If no senderId, infer from senderIsOwner (e.g. cron runs).
-    const effectiveSenderId = options?.senderId ?? (senderIsOwner ? "cron" : "unknown");
-
-    // Task 2.2: Map internal flag → isTrustedInternal for SYSTEM tier.
-    const isTrustedInternal = options?.internal === true;
-
-    senderTier = resolveSenderTier(
-      effectiveSenderId,
-      options?.senderUsername ?? undefined,
-      heimdallCfg,
-      undefined, // allowFrom (not applicable here)
-      isTrustedInternal,
-    );
-    // Task 2.3: OWNER override removed. Internal calls now use SYSTEM tier (least privilege).
-    // Legacy senderIsOwner still passed to applyOwnerOnlyToolPolicy for backward compat.
-  }
-
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
@@ -518,8 +494,6 @@ export function createOpenClawCodingTools(options?: {
       agentId,
       sessionKey: options?.sessionKey,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-      senderTier,
-      heimdallConfig: heimdallCfg,
     }),
   );
   const withAbort = options?.abortSignal
