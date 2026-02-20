@@ -436,7 +436,7 @@ export async function resolveMedia(
           });
         }
         return {
-          path: saved?.path || undefined,
+          path: saved?.path ?? "",
           contentType: saved?.contentType,
           placeholder: "<media:sticker>",
           stickerMetadata: {
