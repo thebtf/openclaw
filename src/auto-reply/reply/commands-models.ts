@@ -187,7 +187,11 @@ function resolveProviderLabel(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   sessionEntry?: SessionEntry;
+  showKey?: boolean;
 }): string {
+  if (!params.showKey) {
+    return params.provider;
+  }
   const authLabel = resolveModelAuthLabel({
     provider: params.provider,
     cfg: params.cfg,
@@ -206,12 +210,14 @@ export function formatModelsAvailableHeader(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   sessionEntry?: SessionEntry;
+  showKey?: boolean;
 }): string {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
     cfg: params.cfg,
     agentDir: params.agentDir,
     sessionEntry: params.sessionEntry,
+    showKey: params.showKey,
   });
   return `Models (${providerLabel}) — ${params.total} available`;
 }
