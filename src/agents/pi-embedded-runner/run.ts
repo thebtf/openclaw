@@ -54,6 +54,11 @@ import {
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
+import {
+  isModelSpecificReason,
+  isProviderProxy,
+  markModelCooldown,
+} from "../proxy-model-cooldown.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -1405,14 +1410,25 @@ export async function runEmbeddedPiAgent(
 
           if (shouldRotate) {
             if (lastProfileId) {
-              const reason = timedOut ? "timeout" : assistantProfileFailureReason;
-              // Skip cooldown for timeouts: a timeout is model/network-specific,
-              // not an auth issue. Marking the profile would poison fallback models
-              // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
-              await maybeMarkAuthProfileFailure({
-                profileId: lastProfileId,
-                reason,
-              });
+              const reason =
+                timedOut || assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : (assistantFailoverReason ?? "unknown");
+              if (isProviderProxy(params.config, provider) && isModelSpecificReason(reason)) {
+                // Proxy provider + model-specific failure: mark per-model cooldown only.
+                // The auth profile itself is healthy — other models on this proxy remain available.
+                markModelCooldown(provider, modelId);
+                log.debug(
+                  `Proxy model ${provider}/${modelId} in cooldown (reason: ${reason}). Other models unaffected.`,
+                );
+              } else {
+                // Non-proxy provider or profile-level failure:
+                // maybeMarkAuthProfileFailure already skips timeouts.
+                await maybeMarkAuthProfileFailure({
+                  profileId: lastProfileId,
+                  reason: assistantProfileFailureReason,
+                });
+              }
               if (timedOut && !isProbeSession) {
                 log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
               }
