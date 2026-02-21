@@ -367,6 +367,9 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        providerOptions: z
+          .record(z.string(), z.object({ isProxy: z.boolean().optional() }).passthrough())
+          .optional(),
       })
       .strict()
       .optional(),
