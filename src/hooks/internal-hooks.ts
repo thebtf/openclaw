@@ -169,6 +169,14 @@ export interface InternalHookEvent {
   timestamp: Date;
   /** Messages to send back to the user (hooks can push to this array) */
   messages: string[];
+  /**
+   * Set by a handler to signal that the caller should skip further processing.
+   * All handlers still run (error isolation preserved). Caller checks this after
+   * triggerInternalHook returns.
+   */
+  cancelled?: boolean;
+  /** Human-readable reason for cancellation, set alongside cancelled */
+  cancelReason?: string;
 }
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
@@ -309,6 +317,14 @@ export function createInternalHookEvent(
     timestamp: new Date(),
     messages: [],
   };
+}
+
+/**
+ * Check if a hook event has been cancelled by a handler.
+ * Use after triggerInternalHook to decide whether to skip further processing.
+ */
+export function isCancelledEvent(event: InternalHookEvent): boolean {
+  return Boolean(event.cancelled);
 }
 
 function isHookEventTypeAndAction(
