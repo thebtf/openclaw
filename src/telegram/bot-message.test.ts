@@ -118,6 +118,7 @@ describe("telegram bot message processor", () => {
   });
 
 
+
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
