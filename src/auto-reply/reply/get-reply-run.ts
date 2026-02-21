@@ -8,6 +8,7 @@ import type { InlineDirectives } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -367,10 +368,18 @@ export async function runPreparedReply(
     if (channel && to && !isGroupChat) {
       const modelLabel = `${provider}/${model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
+      const modelAuthLabel = resolveModelAuthLabel({
+        provider,
+        cfg,
+        sessionEntry,
+        agentDir,
+      });
+      const authSuffix =
+        modelAuthLabel && modelAuthLabel !== "unknown" ? ` · 🔑 ${modelAuthLabel}` : "";
       const text =
         modelLabel === defaultLabel
-          ? `✅ New session started · model: ${modelLabel}`
-          : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})`;
+          ? `✅ New session started · model: ${modelLabel}${authSuffix}`
+          : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})${authSuffix}`;
       await routeReply({
         payload: { text },
         channel,
