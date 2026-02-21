@@ -55,7 +55,7 @@ describe("telegram bot message processor", () => {
     allowFrom: [],
     groupAllowFrom: [],
     ackReactionScope: "none",
-    logger: { info: vi.fn() },
+    logger: { info: vi.fn(), warn: vi.fn() },
     resolveGroupActivation: () => true,
     resolveGroupRequireMention: () => false,
     resolveTelegramGroupConfig: () => ({}),
@@ -116,6 +116,7 @@ describe("telegram bot message processor", () => {
     expect(triggerInternalHook).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
+
 
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
