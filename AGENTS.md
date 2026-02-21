@@ -252,3 +252,28 @@
   - `node --import tsx scripts/release-check.ts`
   - `pnpm release:check`
   - `pnpm test:install:smoke` or `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` for non-root smoke path.
+
+---
+
+## Fork Patch Policy (thebtf fork — not upstream)
+
+This repo is a fork maintained at `github.com/thebtf/openclaw`.
+All fork-specific patches live on named `feat/*` or `fix/*` branches and are tracked via `patch/*` git tags.
+
+**Before making any change to fork code:**
+
+1. Check current branch: `git branch --show-current`
+2. Must be on `main` or a `feat/xxx` branch — **never develop directly on a patch branch or directly on main**
+3. For a new patch: `git checkout main && git checkout -b feat/<name>`
+4. For extending an existing patch: checkout the existing branch (NOT rebased to `feat/` — see SKILL.md)
+
+**Full procedure:** `.claude/skills/openclaw-update/SKILL.md`
+Contains: patch tag table, upstream merge procedure, branch policy, spot-checks.
+
+**patch/\* tag rules:**
+
+- Each patch branch has a corresponding `patch/<branch-name>` tag pointing to its latest commit
+- After any commit to a patch branch, update the tag: `git tag -f patch/<name> HEAD && git push origin -f patch/<name>`
+- After upstream update (Phase 5.5 in skill): re-tag all surviving branches
+
+**Never squash or drop patch branch commits** — the branch history is the patch record.

@@ -145,20 +145,19 @@ export async function buildStatusReply(params: {
     selectedModel: model,
     sessionEntry,
   });
-  const selectedModelAuth = resolveModelAuthLabel({
-    provider,
-    cfg,
-    sessionEntry,
-    agentDir: statusAgentDir,
-  });
-  const activeModelAuth = modelRefs.activeDiffers
-    ? resolveModelAuthLabel({
-        provider: modelRefs.active.provider,
-        cfg,
-        sessionEntry,
-        agentDir: statusAgentDir,
-      })
-    : selectedModelAuth;
+  const showAuthKey = command.senderIsOwner && !isGroup;
+  const selectedModelAuth = showAuthKey
+    ? resolveModelAuthLabel({ provider, cfg, sessionEntry, agentDir: statusAgentDir })
+    : undefined;
+  const activeModelAuth =
+    showAuthKey && modelRefs.activeDiffers
+      ? resolveModelAuthLabel({
+          provider: modelRefs.active.provider,
+          cfg,
+          sessionEntry,
+          agentDir: statusAgentDir,
+        })
+      : selectedModelAuth;
   const agentDefaults = cfg.agents?.defaults ?? {};
   const statusText = buildStatusMessage({
     config: cfg,
