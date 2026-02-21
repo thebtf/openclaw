@@ -93,3 +93,6 @@ package-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+# Agent session state (session-specific, noisy in diffs)
+.agent/CONTINUITY.md
