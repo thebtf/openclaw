@@ -191,6 +191,7 @@ export async function runReplyAgent(params: {
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
+  const heimdallCfg = cfg?.agents?.defaults?.heimdall;
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply
       ? resolveBlockStreamingCoalescing(
@@ -200,10 +201,17 @@ export async function runReplyAgent(params: {
           blockReplyChunking,
         )
       : undefined;
+  // Heimdall FILTER (streaming): wrap onBlockReply to redact secrets in streamed chunks.
+  let blockReplyCallback = opts?.onBlockReply;
+  if (blockReplyCallback && heimdallCfg?.enabled) {
+    const { wrapBlockReplyWithFilter } =
+      await import("../../security/heimdall/streaming-filter.js");
+    blockReplyCallback = wrapBlockReplyWithFilter(blockReplyCallback, heimdallCfg);
+  }
   const blockReplyPipeline =
-    blockStreamingEnabled && opts?.onBlockReply
+    blockStreamingEnabled && blockReplyCallback
       ? createBlockReplyPipeline({
-          onBlockReply: opts.onBlockReply,
+          onBlockReply: blockReplyCallback,
           timeoutMs: blockReplyTimeoutMs,
           coalescing: blockReplyCoalescing,
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
@@ -697,6 +705,12 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+
+    // Heimdall FILTER: redact secrets from outbound reply payloads (batch).
+    if (heimdallCfg?.enabled && heimdallCfg.outputFilter?.enabled !== false) {
+      const { applyOutputFilter } = await import("../../security/heimdall/apply-filter.js");
+      finalPayloads = applyOutputFilter(finalPayloads, heimdallCfg);
     }
 
     // Post-compaction read audit (Layer 3)

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
 import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
+import { HeimdallSchema } from "../security/heimdall/config-schema.js";
 import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
@@ -162,6 +163,7 @@ export const TelegramAccountSchemaBase = z
     stickerVisionModel: z.string().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    heimdall: HeimdallSchema,
   })
   .strict();
 
