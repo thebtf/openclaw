@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { RunEmbeddedPiAgentParams } from "./run/params.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -45,6 +43,11 @@ import {
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
+import {
+  isModelSpecificReason,
+  isProviderProxy,
+  markModelCooldown,
+} from "../proxy-model-cooldown.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
@@ -52,11 +55,13 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
+import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -909,13 +914,24 @@ export async function runEmbeddedPiAgent(
                 timedOut || assistantFailoverReason === "timeout"
                   ? "timeout"
                   : (assistantFailoverReason ?? "unknown");
-              await markAuthProfileFailure({
-                store: authStore,
-                profileId: lastProfileId,
-                reason,
-                cfg: params.config,
-                agentDir: params.agentDir,
-              });
+              if (isProviderProxy(params.config, provider) && isModelSpecificReason(reason)) {
+                // Proxy provider + model-specific failure: mark per-model cooldown only.
+                // The auth profile itself is healthy — other models on this proxy remain available.
+                markModelCooldown(provider, modelId);
+                log.debug(
+                  `Proxy model ${provider}/${modelId} in cooldown (reason: ${reason}). Other models unaffected.`,
+                );
+              } else {
+                // Non-proxy provider or profile-level failure (billing, auth, unknown):
+                // use existing auth-profile cooldown.
+                await markAuthProfileFailure({
+                  store: authStore,
+                  profileId: lastProfileId,
+                  reason,
+                  cfg: params.config,
+                  agentDir: params.agentDir,
+                });
+              }
               if (timedOut && !isProbeSession) {
                 log.warn(
                   `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
