@@ -55,7 +55,7 @@ describe("telegram bot message processor", () => {
     allowFrom: [],
     groupAllowFrom: [],
     ackReactionScope: "none",
-    logger: { info: vi.fn(), warn: vi.fn() },
+    logger: { info: vi.fn() },
     resolveGroupActivation: () => true,
     resolveGroupRequireMention: () => false,
     resolveTelegramGroupConfig: () => ({}),
@@ -66,16 +66,22 @@ describe("telegram bot message processor", () => {
     opts: {},
   } as unknown as Parameters<typeof createTelegramMessageProcessor>[0];
 
-  it("dispatches when context is available", async () => {
-    buildTelegramMessageContext.mockResolvedValue(mockContext);
-
-    const processMessage = createTelegramMessageProcessor(baseDeps);
+  async function processSampleMessage(
+    processMessage: ReturnType<typeof createTelegramMessageProcessor>,
+  ) {
     await processMessage(
       { message: mockMsg } as unknown as Parameters<typeof processMessage>[0],
       [],
       [],
       {},
     );
+  }
+
+  it("dispatches when context is available", async () => {
+    buildTelegramMessageContext.mockResolvedValue(mockContext);
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await processSampleMessage(processMessage);
 
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
   });
@@ -85,7 +91,12 @@ describe("telegram bot message processor", () => {
     triggerInternalHook.mockRejectedValue(new Error("hook exploded"));
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processMessage({ message: mockMsg }, [], [], {});
+    await processMessage(
+      { message: mockMsg } as unknown as Parameters<typeof processMessage>[0],
+      [],
+      [],
+      {},
+    );
 
     expect(triggerInternalHook).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
@@ -111,28 +122,21 @@ describe("telegram bot message processor", () => {
     });
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processMessage({ message: mockMsg }, [], [], {});
+    await processMessage(
+      { message: mockMsg } as unknown as Parameters<typeof processMessage>[0],
+      [],
+      [],
+      {},
+    );
 
     expect(triggerInternalHook).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
 
-
-
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processMessage(
-      {
-        message: {
-          chat: { id: 123, type: "private", title: "chat" },
-          message_id: 456,
-        },
-      } as unknown as Parameters<typeof processMessage>[0],
-      [],
-      [],
-      {},
-    );
+    await processSampleMessage(processMessage);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
 });

@@ -61,8 +61,14 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
-import { resolveForumTopicName } from "./forum-topic-cache.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import {
+  buildTelegramStatusReactionVariants,
+  resolveTelegramAllowedEmojiReactions,
+  resolveTelegramReactionVariant,
+  resolveTelegramStatusReactionEmojis,
+} from "./status-reaction-variants.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -111,6 +117,24 @@ export type BuildTelegramMessageContextParams = {
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
+  /**
+   * When true, bypasses the mention gate so a prefilter-approved message can
+   * proceed to full context construction even without an @mention.
+   */
+  bypassMentionGate?: boolean;
+};
+
+/**
+ * Returned by buildTelegramMessageContext when a group message was stopped by
+ * the mention gate (requireMention: true, no @mention, no reply-to-bot) but a
+ * prefilter hook should have the chance to override the drop decision.
+ *
+ * Handlers should fire a message:prefilter hook with `data`, then re-call
+ * buildTelegramMessageContext with `bypassMentionGate: true` if approved.
+ */
+export type MentionGateSkipped = {
+  readonly mentionGateSkipped: true;
+  readonly data: import("../hooks/internal-hooks.js").MessagePrefilterHookContext;
 };
 
 async function resolveStickerVisionSupport(params: {
@@ -151,6 +175,7 @@ export const buildTelegramMessageContext = async ({
   resolveGroupActivation,
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
+  bypassMentionGate,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
   recordChannelActivity({
@@ -192,11 +217,12 @@ export const buildTelegramMessageContext = async ({
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom });
+  const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom, dmPolicy });
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const effectiveGroupAllow = normalizeAllowFromWithStore({
     allowFrom: groupAllowOverride ?? groupAllowFrom,
     storeAllowFrom,
+    dmPolicy,
   });
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
@@ -477,7 +503,7 @@ export const buildTelegramMessageContext = async ({
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-  if (isGroup && requireMention && canDetectMention) {
+  if (isGroup && requireMention && canDetectMention && !bypassMentionGate) {
     if (mentionGate.shouldSkip) {
       logger.info({ chatId, reason: "no-mention" }, "skipping group message");
       recordPendingHistoryEntryIfEnabled({
@@ -493,7 +519,17 @@ export const buildTelegramMessageContext = async ({
             }
           : null,
       });
-      return null;
+      return {
+        mentionGateSkipped: true,
+        data: {
+          accountId: account.accountId,
+          channel: "telegram",
+          chatId: String(chatId),
+          messageId: typeof msg.message_id === "number" ? String(msg.message_id) : "",
+          text: rawBody,
+          senderId: senderId || undefined,
+        },
+      } satisfies MentionGateSkipped;
     }
   }
 
@@ -505,7 +541,6 @@ export const buildTelegramMessageContext = async ({
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldAckReaction = () =>
     Boolean(
-      !isForum &&
       ackReaction &&
       shouldAckReactionGate({
         scope: ackReactionScope,
@@ -524,14 +559,24 @@ export const buildTelegramMessageContext = async ({
       messageId: number,
       reactions: Array<{ type: "emoji"; emoji: string }>,
     ) => Promise<void>;
+    getChat?: (chatId: number | string) => Promise<unknown>;
   };
   const reactionApi =
     typeof api.setMessageReaction === "function" ? api.setMessageReaction.bind(api) : null;
+  const getChatApi = typeof api.getChat === "function" ? api.getChat.bind(api) : null;
 
   // Status Reactions controller (lifecycle reactions)
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
     statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldAckReaction();
+  const resolvedStatusReactionEmojis = resolveTelegramStatusReactionEmojis({
+    initialEmoji: ackReaction,
+    overrides: statusReactionsConfig?.emojis,
+  });
+  const statusReactionVariantsByEmoji = buildTelegramStatusReactionVariants(
+    resolvedStatusReactionEmojis,
+  );
+  let allowedStatusReactionEmojisPromise: Promise<Set<string> | null> | null = null;
   const statusReactionController: StatusReactionController | null =
     statusReactionsEnabled && msg.message_id
       ? createStatusReactionController({
@@ -539,13 +584,36 @@ export const buildTelegramMessageContext = async ({
           adapter: {
             setReaction: async (emoji: string) => {
               if (reactionApi) {
-                await reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji }]);
+                if (!allowedStatusReactionEmojisPromise) {
+                  allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
+                    chat: msg.chat,
+                    chatId,
+                    getChat: getChatApi ?? undefined,
+                  }).catch((err) => {
+                    logVerbose(
+                      `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
+                    );
+                    return null;
+                  });
+                }
+                const allowedStatusReactionEmojis = await allowedStatusReactionEmojisPromise;
+                const resolvedEmoji = resolveTelegramReactionVariant({
+                  requestedEmoji: emoji,
+                  variantsByRequestedEmoji: statusReactionVariantsByEmoji,
+                  allowedEmojiReactions: allowedStatusReactionEmojis,
+                });
+                if (!resolvedEmoji) {
+                  return;
+                }
+                await reactionApi(chatId, msg.message_id, [
+                  { type: "emoji", emoji: resolvedEmoji },
+                ]);
               }
             },
             // Telegram replaces atomically — no removeReaction needed
           },
           initialEmoji: ackReaction,
-          emojis: statusReactionsConfig?.emojis,
+          emojis: resolvedStatusReactionEmojis,
           timing: statusReactionsConfig?.timing,
           onError: (err) => {
             logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
@@ -574,48 +642,24 @@ export const buildTelegramMessageContext = async ({
         )
       : null;
 
-  // Deferred forum reaction: react to the first outgoing message instead of the user's incoming
-  // message. In forum topics, reacting to the incoming message causes Telegram to re-render the
-  // thread header slot (visible flicker). Reacting to our own outgoing message avoids this.
-  let deferredForumReactionFired = false;
-  const deferredForumReaction: ((outMsgId: number) => void) | null =
-    isForum &&
-    ackReaction &&
-    reactionApi &&
-    shouldAckReactionGate({
-      scope: ackReactionScope,
-      isDirect: !isGroup,
-      isGroup,
-      isMentionableGroup: isGroup,
-      requireMention: Boolean(requireMention),
-      canDetectMention,
-      effectiveWasMentioned,
-      shouldBypassMention: mentionGate.shouldBypassMention,
-    })
-      ? (outMsgId: number): void => {
-          if (deferredForumReactionFired) {
-            return;
-          }
-          deferredForumReactionFired = true;
-          void withTelegramApiErrorLogging({
-            operation: "setMessageReaction",
-            fn: () => reactionApi(chatId, outMsgId, [{ type: "emoji", emoji: ackReaction }]),
-          }).catch((err) => {
-            logVerbose(`telegram forum deferred-react failed for chat ${chatId}: ${String(err)}`);
-          });
-        }
-      : null;
-
   const replyTarget = describeReplyTarget(msg);
   const forwardOrigin = normalizeForwardedContext(msg);
+  // Build forward annotation for reply target if it was itself a forwarded message (issue #9619)
+  const replyForwardAnnotation = replyTarget?.forwardedFrom
+    ? `[Forwarded from ${replyTarget.forwardedFrom.from}${
+        replyTarget.forwardedFrom.date
+          ? ` at ${new Date(replyTarget.forwardedFrom.date * 1000).toISOString()}`
+          : ""
+      }]\n`
+    : "";
   const replySuffix = replyTarget
     ? replyTarget.kind === "quote"
       ? `\n\n[Quoting ${replyTarget.sender}${
           replyTarget.id ? ` id:${replyTarget.id}` : ""
-        }]\n"${replyTarget.body}"\n[/Quoting]`
+        }]\n${replyForwardAnnotation}"${replyTarget.body}"\n[/Quoting]`
       : `\n\n[Replying to ${replyTarget.sender}${
           replyTarget.id ? ` id:${replyTarget.id}` : ""
-        }]\n${replyTarget.body}\n[/Replying]`
+        }]\n${replyForwardAnnotation}${replyTarget.body}\n[/Replying]`
     : "";
   const forwardPrefix = forwardOrigin
     ? `[Forwarded from ${forwardOrigin.from}${
@@ -669,13 +713,10 @@ export const buildTelegramMessageContext = async ({
     });
   }
 
-  const skillFilter = firstDefined(topicConfig?.skills, groupConfig?.skills);
-  const systemPromptParts = [
-    groupConfig?.systemPrompt?.trim() || null,
-    topicConfig?.systemPrompt?.trim() || null,
-  ].filter((entry): entry is string => Boolean(entry));
-  const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
+    groupConfig,
+    topicConfig,
+  });
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
@@ -710,6 +751,15 @@ export const buildTelegramMessageContext = async ({
     ReplyToBody: replyTarget?.body,
     ReplyToSender: replyTarget?.sender,
     ReplyToIsQuote: replyTarget?.kind === "quote" ? true : undefined,
+    // Forward context from reply target (issue #9619: forward + comment bundling)
+    ReplyToForwardedFrom: replyTarget?.forwardedFrom?.from,
+    ReplyToForwardedFromType: replyTarget?.forwardedFrom?.fromType,
+    ReplyToForwardedFromId: replyTarget?.forwardedFrom?.fromId,
+    ReplyToForwardedFromUsername: replyTarget?.forwardedFrom?.fromUsername,
+    ReplyToForwardedFromTitle: replyTarget?.forwardedFrom?.fromTitle,
+    ReplyToForwardedDate: replyTarget?.forwardedFrom?.date
+      ? replyTarget.forwardedFrom.date * 1000
+      : undefined,
     ForwardedFrom: forwardOrigin?.from,
     ForwardedFromType: forwardOrigin?.fromType,
     ForwardedFromId: forwardOrigin?.fromId,
@@ -745,12 +795,6 @@ export const buildTelegramMessageContext = async ({
     CommandAuthorized: commandAuthorized,
     // For groups: use resolved forum topic id; for DMs: use raw messageThreadId
     MessageThreadId: threadSpec.id,
-    // ThreadLabel: human-readable topic name when cached, otherwise numeric id.
-    // Name is populated by the forum_topic_created service message interceptor in bot-handlers.ts.
-    ThreadLabel:
-      threadSpec.id != null
-        ? (resolveForumTopicName(chatId, threadSpec.id) ?? String(threadSpec.id))
-        : undefined,
     IsForum: isForum,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,
@@ -765,7 +809,7 @@ export const buildTelegramMessageContext = async ({
       ? {
           sessionKey: route.mainSessionKey,
           channel: "telegram",
-          to: String(chatId),
+          to: `telegram:${chatId}`,
           accountId: route.accountId,
           // Preserve DM topic threadId for replies (fixes #8891)
           threadId: dmThreadId != null ? String(dmThreadId) : undefined,
@@ -819,11 +863,11 @@ export const buildTelegramMessageContext = async ({
     reactionApi,
     removeAckAfterReply,
     statusReactionController,
-    deferredForumReaction,
     accountId: account.accountId,
   };
 };
 
-export type TelegramMessageContext = NonNullable<
-  Awaited<ReturnType<typeof buildTelegramMessageContext>>
+export type TelegramMessageContext = Exclude<
+  NonNullable<Awaited<ReturnType<typeof buildTelegramMessageContext>>>,
+  MentionGateSkipped
 >;
