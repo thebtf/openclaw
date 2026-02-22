@@ -56,6 +56,8 @@ export async function deliverReplies(params: {
   replyQuoteText?: string;
   /** Callback invoked with the first outgoing message_id, called at most once. */
   onFirstMessageSent?: (id: number) => void;
+  /** message_id of the incoming message to reply to when the agent initiates (no reply chain). */
+  incomingMessageId?: number;
 }): Promise<{ delivered: boolean }> {
   const {
     replies,
@@ -119,7 +121,10 @@ export async function deliverReplies(params: {
       runtime.error?.(danger("reply missing text/media"));
       continue;
     }
-    const replyToId = replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+    const replyToId =
+      replyToMode === "off"
+        ? undefined
+        : (resolveTelegramReplyId(reply.replyToId) ?? params.incomingMessageId);
 
     // Handle sticker delivery before text/media
     if (hasSticker) {

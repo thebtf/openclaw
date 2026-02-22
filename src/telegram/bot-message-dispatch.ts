@@ -442,6 +442,7 @@ export const dispatchTelegramMessage = async ({
     linkPreview: telegramCfg.linkPreview,
     replyQuoteText,
     onFirstMessageSent: deferredForumReaction ?? undefined,
+    incomingMessageId: typeof msg.message_id === "number" ? msg.message_id : undefined,
   };
   const getLanePreviewText = (lane: DraftLaneState) =>
     streamMode === "block" ? lane.draftText : lane.lastPartialText;
