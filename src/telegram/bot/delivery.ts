@@ -54,6 +54,8 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
+  /** message_id of the incoming message to reply to when the agent initiates (no reply chain). */
+  incomingMessageId?: number;
 }): Promise<{ delivered: boolean }> {
   const {
     replies,
@@ -103,7 +105,10 @@ export async function deliverReplies(params: {
       runtime.error?.(danger("reply missing text/media"));
       continue;
     }
-    const replyToId = replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+    const replyToId =
+      replyToMode === "off"
+        ? undefined
+        : (resolveTelegramReplyId(reply.replyToId) ?? params.incomingMessageId);
     const replyToMessageIdForPayload =
       replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
     const mediaList = reply.mediaUrls?.length
