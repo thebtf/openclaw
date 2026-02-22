@@ -61,6 +61,7 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
+import { resolveForumTopicName } from "./forum-topic-cache.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 
 export type TelegramMediaRef = {
@@ -712,8 +713,12 @@ export const buildTelegramMessageContext = async ({
     CommandAuthorized: commandAuthorized,
     // For groups: use resolved forum topic id; for DMs: use raw messageThreadId
     MessageThreadId: threadSpec.id,
-    // ThreadLabel: numeric thread id as string, consumed by inbound-meta.ts → agent untrusted block
-    ThreadLabel: threadSpec.id != null ? String(threadSpec.id) : undefined,
+    // ThreadLabel: human-readable topic name when cached, otherwise numeric id.
+    // Name is populated by the forum_topic_created service message interceptor in bot-handlers.ts.
+    ThreadLabel:
+      threadSpec.id != null
+        ? (resolveForumTopicName(chatId, threadSpec.id) ?? String(threadSpec.id))
+        : undefined,
     IsForum: isForum,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,

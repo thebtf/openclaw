@@ -1,7 +1,4 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
-import type { TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
-import type { TelegramMediaRef } from "./bot-message-context.js";
-import type { TelegramContext } from "./bot/types.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
@@ -20,6 +17,7 @@ import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import type { TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
@@ -31,6 +29,7 @@ import {
   normalizeAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
+import type { TelegramMediaRef } from "./bot-message-context.js";
 import { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
@@ -44,6 +43,8 @@ import {
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
+import type { TelegramContext } from "./bot/types.js";
+import { cacheForumTopicName } from "./forum-topic-cache.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -1143,6 +1144,14 @@ export const registerTelegramHandlers = ({
     const msg = ctx.message;
     if (!msg) {
       return;
+    }
+    // Cache forum topic names for human-readable ThreadLabel on subsequent messages.
+    // forum_topic_created is a service message (no text/media) — it never reaches the agent,
+    // but we extract the topic name here before the pipeline discards it.
+    const forumTopicCreated = (msg as { forum_topic_created?: { name?: string } })
+      .forum_topic_created;
+    if (forumTopicCreated?.name && msg.message_thread_id != null) {
+      cacheForumTopicName(msg.chat.id, msg.message_thread_id, forumTopicCreated.name);
     }
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
