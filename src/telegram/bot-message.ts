@@ -9,6 +9,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
+  type MentionGateSkipped,
   type TelegramMediaRef,
   type TelegramMessageContext,
 } from "./bot-message-context.js";
@@ -142,7 +143,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     // Hooks cancel the event to DROP; leaving it unmodified means FORWARD.
     // On hook error: fail-open — message is forwarded.
     if ("mentionGateSkipped" in buildResult) {
-      const { data } = buildResult;
+      const { data } = buildResult as MentionGateSkipped;
       const sessionKey = `agent:${data.accountId}:${data.channel}:group:${data.chatId}`;
       const prefilterEvent = createInternalHookEvent("message", "prefilter", sessionKey, data);
       try {
