@@ -574,6 +574,38 @@ export const buildTelegramMessageContext = async ({
         )
       : null;
 
+  // Deferred forum reaction: react to the first outgoing message instead of the user's incoming
+  // message. In forum topics, reacting to the incoming message causes Telegram to re-render the
+  // thread header slot (visible flicker). Reacting to our own outgoing message avoids this.
+  let deferredForumReactionFired = false;
+  const deferredForumReaction: ((outMsgId: number) => void) | null =
+    isForum &&
+    ackReaction &&
+    reactionApi &&
+    shouldAckReactionGate({
+      scope: ackReactionScope,
+      isDirect: !isGroup,
+      isGroup,
+      isMentionableGroup: isGroup,
+      requireMention: Boolean(requireMention),
+      canDetectMention,
+      effectiveWasMentioned,
+      shouldBypassMention: mentionGate.shouldBypassMention,
+    })
+      ? (outMsgId: number): void => {
+          if (deferredForumReactionFired) {
+            return;
+          }
+          deferredForumReactionFired = true;
+          void withTelegramApiErrorLogging({
+            operation: "setMessageReaction",
+            fn: () => reactionApi(chatId, outMsgId, [{ type: "emoji", emoji: ackReaction }]),
+          }).catch((err) => {
+            logVerbose(`telegram forum deferred-react failed for chat ${chatId}: ${String(err)}`);
+          });
+        }
+      : null;
+
   const replyTarget = describeReplyTarget(msg);
   const forwardOrigin = normalizeForwardedContext(msg);
   const replySuffix = replyTarget
@@ -787,6 +819,7 @@ export const buildTelegramMessageContext = async ({
     reactionApi,
     removeAckAfterReply,
     statusReactionController,
+    deferredForumReaction,
     accountId: account.accountId,
   };
 };

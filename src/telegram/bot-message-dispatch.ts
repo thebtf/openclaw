@@ -1,11 +1,4 @@
 import type { Bot } from "grammy";
-import type { ReplyPayload } from "../auto-reply/types.js";
-import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
-import type { TelegramBotOptions } from "./bot.js";
-import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   findModelInCatalog,
@@ -17,15 +10,22 @@ import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
+import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveCustomEmojiAnnotations } from "./custom-emoji.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -121,6 +121,7 @@ export const dispatchTelegramMessage = async ({
     reactionApi,
     removeAckAfterReply,
     statusReactionController,
+    deferredForumReaction,
   } = context;
 
   const draftMaxChars = Math.min(textLimit, 4096);
@@ -440,6 +441,7 @@ export const dispatchTelegramMessage = async ({
     chunkMode,
     linkPreview: telegramCfg.linkPreview,
     replyQuoteText,
+    onFirstMessageSent: deferredForumReaction ?? undefined,
   };
   const getLanePreviewText = (lane: DraftLaneState) =>
     streamMode === "block" ? lane.draftText : lane.lastPartialText;
