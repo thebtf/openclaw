@@ -2,6 +2,7 @@ import type { ReplyToMode } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
 import {
   createInternalHookEvent,
+  getRegisteredEventKeys,
   isCancelledEvent,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
@@ -141,10 +142,17 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
 
     // Mention gate returned a prefilter signal — the message had no @mention and
     // no reply-to-bot, but a hook can override the drop decision.
-    // Hooks cancel the event to DROP; leaving it unmodified means FORWARD.
-    // On hook error: fail-open — message is forwarded.
+    // If no prefilter handlers are registered, the drop is preserved (requireMention:true
+    // semantics unchanged). When handlers are registered:
+    //   - Hooks cancel the event to DROP; leaving it unmodified means FORWARD.
+    //   - On hook error: fail-open — message is forwarded.
     if ("mentionGateSkipped" in buildResult) {
       const { data } = buildResult as MentionGateSkipped;
+      // No prefilter handlers registered — preserve requireMention drop behavior.
+      const registeredKeys = getRegisteredEventKeys();
+      if (!registeredKeys.includes("message:prefilter") && !registeredKeys.includes("message")) {
+        return;
+      }
       const sessionKey = `agent:${data.accountId}:${data.channel}:group:${data.chatId}`;
       const prefilterEvent = createInternalHookEvent("message", "prefilter", sessionKey, data);
       try {
