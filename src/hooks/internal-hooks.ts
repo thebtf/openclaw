@@ -93,6 +93,36 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
+// ============================================================================
+// Message Prefilter Hook Event
+//
+// Fires when a group message would be dropped by the mention gate
+// (requireMention: true, no @mention, no reply-to-bot).
+// Hooks can leave event unmodified to forward the message to the agent,
+// or set event.cancelled = true to drop it.
+// ============================================================================
+
+export type MessagePrefilterHookContext = {
+  /** Provider account ID (e.g. "jeeves") */
+  accountId: string;
+  /** Channel identifier (e.g. "telegram") */
+  channel: string;
+  /** Conversation/chat ID */
+  chatId: string;
+  /** Raw message text */
+  text: string;
+  /** Message ID from the provider */
+  messageId: string;
+  /** Sender identifier */
+  senderId?: string;
+};
+
+export type MessagePrefilterHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "prefilter";
+  context: MessagePrefilterHookContext;
+};
+
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
   type: InternalHookEventType;
@@ -282,6 +312,12 @@ export function isMessageReceivedEvent(
     return false;
   }
   return typeof context.from === "string" && typeof context.channelId === "string";
+}
+
+export function isMessagePrefilterEvent(
+  event: InternalHookEvent,
+): event is MessagePrefilterHookEvent {
+  return event.type === "message" && event.action === "prefilter";
 }
 
 export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
