@@ -53,6 +53,16 @@ export type TelegramInboundBodyResult = {
   locationData?: NormalizedLocation;
 };
 
+/** Returned when mention gate fires but a prefilter hook should decide. */
+export type MentionGateSkippedResult = {
+  readonly mentionGateSkipped: true;
+  readonly accountId: string;
+  readonly chatId: string;
+  readonly messageId: string;
+  readonly text: string;
+  readonly senderId: string | undefined;
+};
+
 async function resolveStickerVisionSupport(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -93,7 +103,9 @@ export async function resolveTelegramInboundBody(params: {
   groupHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
   logger: TelegramLogger;
-}): Promise<TelegramInboundBodyResult | null> {
+  accountId?: string;
+  bypassMentionGate?: boolean;
+}): Promise<TelegramInboundBodyResult | MentionGateSkippedResult | null> {
   const {
     cfg,
     primaryCtx,
@@ -252,7 +264,7 @@ export async function resolveTelegramInboundBody(params: {
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-  if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
+  if (isGroup && requireMention && canDetectMention && !params.bypassMentionGate && mentionGate.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
     recordPendingHistoryEntryIfEnabled({
       historyMap: groupHistories,
@@ -267,7 +279,14 @@ export async function resolveTelegramInboundBody(params: {
           }
         : null,
     });
-    return null;
+    return {
+      mentionGateSkipped: true,
+      accountId: params.accountId ?? "",
+      chatId: String(chatId),
+      messageId: typeof msg.message_id === "number" ? String(msg.message_id) : "",
+      text: rawBody,
+      senderId: senderId || undefined,
+    } satisfies MentionGateSkippedResult;
   }
 
   return {
