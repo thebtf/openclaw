@@ -706,7 +706,7 @@ export const buildTelegramMessageContext = async ({
     Provider: "telegram",
     Surface: "telegram",
     MessageSid: options?.messageIdOverride ?? String(msg.message_id),
-    ReplyToId: replyTarget?.id,
+    ReplyToId: String(msg.message_id),
     ReplyToBody: replyTarget?.body,
     ReplyToSender: replyTarget?.sender,
     ReplyToIsQuote: replyTarget?.kind === "quote" ? true : undefined,
