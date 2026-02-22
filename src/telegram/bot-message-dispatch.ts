@@ -365,6 +365,7 @@ export const dispatchTelegramMessage = async ({
     chunkMode,
     linkPreview: telegramCfg.linkPreview,
     replyQuoteText,
+    incomingMessageId: typeof msg.message_id === "number" ? msg.message_id : undefined,
   };
   const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload => {
     if (payload.text === text) {
