@@ -1,8 +1,8 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
-import type { TelegramContext } from "./types.js";
 import { deliverReplies, resolveMedia } from "./delivery.js";
+import type { TelegramContext } from "./types.js";
 
 const loadWebMedia = vi.fn();
 const baseDeliveryParams = {
@@ -645,7 +645,7 @@ describe("resolveMedia", () => {
     expect(result).not.toBeNull();
     expect(result!.stickerMetadata?.cachedDescription).toBe("A kissing face");
     expect(result!.stickerMetadata?.isVideo).toBe(true);
-    expect(result!.path).toBe("");
+    expect(result!.path).toBeUndefined();
   });
 
   it("thumbnail download failure returns null gracefully", async () => {
