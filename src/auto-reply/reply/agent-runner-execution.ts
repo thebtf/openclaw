@@ -1,8 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
-import type { FollowupRun } from "./queue.js";
-import type { TypingSignaler } from "./typing-mode.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -38,7 +35,10 @@ import {
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
+import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
+import type { TypingSignaler } from "./typing-mode.js";
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -442,7 +442,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 4000 or higher in your config.",
+            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
           },
         };
       }
@@ -488,7 +488,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 4000 or higher in your config.",
+            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
           },
         };
       }

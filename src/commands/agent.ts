@@ -1,9 +1,9 @@
-import type { AgentCommandOpts } from "./agent/types.js";
 import {
   listAgentIds,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveAgentModelPrimary,
+  resolveSessionAgentId,
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
@@ -66,6 +66,7 @@ import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import { resolveSession } from "./agent/session.js";
+import type { AgentCommandOpts } from "./agent/types.js";
 
 type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
@@ -220,14 +221,6 @@ export async function agentCommand(
     }
   }
   const agentCfg = cfg.agents?.defaults;
-  const sessionAgentId = agentIdOverride ?? resolveAgentIdFromSessionKey(opts.sessionKey?.trim());
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
-  const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const workspace = await ensureAgentWorkspace({
-    dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
-  });
-  const workspaceDir = workspace.dir;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -286,6 +279,19 @@ export async function agentCommand(
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
+  const sessionAgentId =
+    agentIdOverride ??
+    resolveSessionAgentId({
+      sessionKey: sessionKey ?? opts.sessionKey?.trim(),
+      config: cfg,
+    });
+  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const agentDir = resolveAgentDir(cfg, sessionAgentId);
+  const workspace = await ensureAgentWorkspace({
+    dir: workspaceDirRaw,
+    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+  });
+  const workspaceDir = workspace.dir;
   let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
 

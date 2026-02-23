@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommand } from "../../commands/agent.js";
@@ -51,6 +50,7 @@ import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { sessionsHandlers } from "./sessions.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 
@@ -192,6 +192,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       extraSystemPrompt?: string;
       idempotencyKey: string;
       timeout?: number;
+      bestEffortDeliver?: boolean;
       label?: string;
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
@@ -216,6 +217,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
+    const requestedBestEffortDeliver =
+      typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
 
     let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
@@ -310,7 +313,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     let resolvedSessionId = request.sessionId?.trim() || undefined;
     let sessionEntry: SessionEntry | undefined;
-    let bestEffortDeliver = false;
+    let bestEffortDeliver = requestedBestEffortDeliver ?? false;
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
     let resolvedSessionKey = requestedSessionKey;
     let skipTimestampInjection = false;
@@ -448,7 +451,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           sessionKey: canonicalSessionKey,
           clientRunId: idem,
         });
-        bestEffortDeliver = true;
+        if (requestedBestEffortDeliver === undefined) {
+          bestEffortDeliver = true;
+        }
       }
       registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }

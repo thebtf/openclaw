@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { TemplateContext } from "../templating.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import type { TemplateContext } from "../templating.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -1179,8 +1179,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
     });
     runWithModelFallbackMock.mockImplementationOnce(
       async ({ run }: RunWithModelFallbackParams) => ({
-        result: await run("google-antigravity", "gemini-3"),
-        provider: "google-antigravity",
+        result: await run("google-gemini-cli", "gemini-3"),
+        provider: "google-gemini-cli",
         model: "gemini-3",
       }),
     );
@@ -1199,8 +1199,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
       return { payloads: [{ text: "ok" }], meta: {} };
     });
     runWithModelFallbackMock.mockImplementation(async ({ run }: RunWithModelFallbackParams) => ({
-      result: await run("google-antigravity", "gemini-3"),
-      provider: "google-antigravity",
+      result: await run("google-gemini-cli", "gemini-3"),
+      provider: "google-gemini-cli",
       model: "gemini-3",
     }));
 

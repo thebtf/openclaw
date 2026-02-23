@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SandboxToolPolicy } from "./sandbox/types.js";
-import type { AnyAgentTool } from "./tools/common.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { TOOL_POLICY_CONFORMANCE } from "./tool-policy.conformance.js";
 import {
   applyOwnerOnlyToolPolicy,
@@ -12,6 +11,7 @@ import {
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 function createOwnerPolicyTools() {
   return [
@@ -55,7 +55,7 @@ describe("tool-policy", () => {
 
   it("resolves known profiles and ignores unknown ones", () => {
     const coding = resolveToolProfilePolicy("coding");
-    expect(coding?.allow).toContain("group:fs");
+    expect(coding?.allow).toContain("read");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
@@ -65,6 +65,7 @@ describe("tool-policy", () => {
     expect(group).toContain("message");
     expect(group).toContain("subagents");
     expect(group).toContain("session_status");
+    expect(group).toContain("tts");
   });
 
   it("normalizes tool names and aliases", () => {

@@ -1,4 +1,11 @@
 import crypto from "node:crypto";
+import { parseAbsoluteTimeMs } from "../parse.js";
+import { computeNextRunAtMs } from "../schedule.js";
+import {
+  normalizeCronStaggerMs,
+  resolveCronStaggerMs,
+  resolveDefaultCronStaggerMs,
+} from "../stagger.js";
 import type {
   CronDelivery,
   CronDeliveryPatch,
@@ -8,14 +15,6 @@ import type {
   CronPayload,
   CronPayloadPatch,
 } from "../types.js";
-import type { CronServiceState } from "./state.js";
-import { parseAbsoluteTimeMs } from "../parse.js";
-import { computeNextRunAtMs } from "../schedule.js";
-import {
-  normalizeCronStaggerMs,
-  resolveCronStaggerMs,
-  resolveDefaultCronStaggerMs,
-} from "../stagger.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import {
   normalizeOptionalAgentId,
@@ -24,6 +23,7 @@ import {
   normalizePayloadToSystemText,
   normalizeRequiredName,
 } from "./normalize.js";
+import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 
@@ -83,6 +83,23 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
+const TELEGRAM_TME_URL_REGEX = /^https?:\/\/t\.me\/|t\.me\//i;
+const TELEGRAM_SLASH_TOPIC_REGEX = /^-?\d+\/\d+$/;
+
+function validateTelegramDeliveryTarget(to: string | undefined): string | undefined {
+  if (!to) {
+    return undefined;
+  }
+  const trimmed = to.trim();
+  if (TELEGRAM_TME_URL_REGEX.test(trimmed)) {
+    return undefined;
+  }
+  if (TELEGRAM_SLASH_TOPIC_REGEX.test(trimmed)) {
+    return `Invalid Telegram delivery target "${to}". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username`;
+  }
+  return undefined;
+}
+
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   if (!job.delivery) {
     return;
@@ -97,6 +114,12 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   }
   if (job.sessionTarget !== "isolated") {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+  }
+  if (job.delivery.channel === "telegram") {
+    const telegramError = validateTelegramDeliveryTarget(job.delivery.to);
+    if (telegramError) {
+      throw new Error(telegramError);
+    }
   }
 }
 

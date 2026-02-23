@@ -2,10 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
-import { VoiceCallConfigSchema } from "../config.js";
 import { processEvent } from "./events.js";
 
 function createContext(overrides: Partial<CallManagerContext> = {}): CallManagerContext {
@@ -71,19 +71,26 @@ function createInboundInitiatedEvent(params: {
   };
 }
 
+function createRejectingInboundContext(): {
+  ctx: CallManagerContext;
+  hangupCalls: HangupCallInput[];
+} {
+  const hangupCalls: HangupCallInput[] = [];
+  const provider = createProvider({
+    hangupCall: async (input: HangupCallInput): Promise<void> => {
+      hangupCalls.push(input);
+    },
+  });
+  const ctx = createContext({
+    config: createInboundDisabledConfig(),
+    provider,
+  });
+  return { ctx, hangupCalls };
+}
+
 describe("processEvent (functional)", () => {
   it("calls provider hangup when rejecting inbound call", () => {
-    const hangupCalls: HangupCallInput[] = [];
-    const provider = createProvider({
-      hangupCall: async (input: HangupCallInput): Promise<void> => {
-        hangupCalls.push(input);
-      },
-    });
-
-    const ctx = createContext({
-      config: createInboundDisabledConfig(),
-      provider,
-    });
+    const { ctx, hangupCalls } = createRejectingInboundContext();
     const event = createInboundInitiatedEvent({
       id: "evt-1",
       providerCallId: "prov-1",
@@ -118,16 +125,7 @@ describe("processEvent (functional)", () => {
   });
 
   it("calls hangup only once for duplicate events for same rejected call", () => {
-    const hangupCalls: HangupCallInput[] = [];
-    const provider = createProvider({
-      hangupCall: async (input: HangupCallInput): Promise<void> => {
-        hangupCalls.push(input);
-      },
-    });
-    const ctx = createContext({
-      config: createInboundDisabledConfig(),
-      provider,
-    });
+    const { ctx, hangupCalls } = createRejectingInboundContext();
     const event1 = createInboundInitiatedEvent({
       id: "evt-init",
       providerCallId: "prov-dup",

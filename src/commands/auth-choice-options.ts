@@ -1,6 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
+import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
 export type { AuthChoiceGroupId };
 
@@ -62,7 +62,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
     value: "google",
     label: "Google",
     hint: "Gemini API key + OAuth",
-    choices: ["gemini-api-key", "google-antigravity", "google-gemini-cli"],
+    choices: ["gemini-api-key", "google-gemini-cli"],
   },
   {
     value: "xai",
@@ -254,11 +254,6 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Uses GitHub device flow",
   },
   { value: "gemini-api-key", label: "Google Gemini API key" },
-  {
-    value: "google-antigravity",
-    label: "Google Antigravity OAuth",
-    hint: "Uses the bundled Antigravity auth plugin",
-  },
   {
     value: "google-gemini-cli",
     label: "Google Gemini CLI OAuth",

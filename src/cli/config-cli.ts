@@ -1,8 +1,9 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
-import type { RuntimeEnv } from "../runtime.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import { redactConfigObject } from "../config/redact-snapshot.js";
 import { danger, info } from "../globals.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -232,7 +233,8 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   try {
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
-    const res = getAtPath(snapshot.config, parsedPath);
+    const redacted = redactConfigObject(snapshot.config);
+    const res = getAtPath(redacted, parsedPath);
     if (!res.found) {
       runtime.error(danger(`Config path not found: ${opts.path}`));
       runtime.exit(1);

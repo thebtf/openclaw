@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayRequestContext } from "./types.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentHandlers } from "./agent.js";
+import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -276,6 +276,29 @@ describe("gateway agent handler", () => {
 
     mocks.loadConfigReturn = {};
     vi.useRealTimers();
+  });
+
+  it("respects explicit bestEffortDeliver=false for main session runs", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "strict delivery",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        replyChannel: "telegram",
+        to: "123",
+        bestEffortDeliver: false,
+        idempotencyKey: "test-strict-delivery",
+      },
+      { reqId: "strict-1" },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
   it("handles missing cliSessionIds gracefully", async () => {
