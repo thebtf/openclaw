@@ -20,7 +20,6 @@ import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnosti
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { HeimdallConfig, OutputFilterPattern } from "../../security/heimdall/types.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
   buildFallbackClearedNotice,
@@ -59,39 +58,6 @@ import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
-/** Escape a literal string for safe use as a regex pattern. */
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Return a copy of `base` HeimdallConfig with dynamic model-name redaction patterns added.
- *
- * Used when the sender is NOT an owner in a private DM (group chats or non-owner DMs).
- * Strips the full `provider/model` label and the short model name from agent text output
- * so internal model identifiers are never exposed to non-owner contexts.
- */
-function buildPrivacyHeimdallConfig(base: HeimdallConfig, modelLabel: string): HeimdallConfig {
-  const privacyPatterns: OutputFilterPattern[] = [];
-
-  // Full provider/model label (e.g. "unleashed-google/gemini-3.1-pro-preview").
-  privacyPatterns.push({ name: "Model Identifier", regex: escapeRegex(modelLabel), flags: "g" });
-
-  // Short model name only (e.g. "gemini-3.1-pro-preview") — skip if same as full label.
-  const modelPart = modelLabel.includes("/") ? (modelLabel.split("/").pop() ?? modelLabel) : "";
-  if (modelPart && modelPart !== modelLabel && modelPart.length >= 6) {
-    privacyPatterns.push({ name: "Model Short Name", regex: escapeRegex(modelPart), flags: "gi" });
-  }
-
-  return {
-    ...base,
-    outputFilter: {
-      ...base.outputFilter,
-      enabled: true,
-      customPatterns: [...(base.outputFilter?.customPatterns ?? []), ...privacyPatterns],
-    },
-  };
-}
 const UNSCHEDULED_REMINDER_NOTE =
   "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
@@ -228,11 +194,6 @@ export async function runReplyAgent(params: {
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
   const heimdallCfg = cfg?.agents?.defaults?.heimdall;
-  // Privacy context: suppress model identifiers in non-owner contexts (group chats and non-owner DMs).
-  // Gate on senderIsOwner === false (explicit non-owner) to avoid filtering cron/internal runs
-  // where senderIsOwner is undefined. Group chats always get the filter regardless of owner status.
-  const isGroupChat = sessionCtx.ChatType === "group";
-  const needsPrivacyFilter = isGroupChat || followupRun.run.senderIsOwner === false;
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply
       ? resolveBlockStreamingCoalescing(
@@ -243,17 +204,11 @@ export async function runReplyAgent(params: {
         )
       : undefined;
   // Heimdall FILTER (streaming): wrap onBlockReply to redact secrets in streamed chunks.
-  // When needsPrivacyFilter, also redact model identifiers using the selected model label.
   let blockReplyCallback = opts?.onBlockReply;
   if (blockReplyCallback && heimdallCfg?.enabled) {
     const { wrapBlockReplyWithFilter } =
       await import("../../security/heimdall/streaming-filter.js");
-    const selectedModelLabel = `${followupRun.run.provider}/${followupRun.run.model}`;
-    const streamCfg =
-      needsPrivacyFilter && heimdallCfg.outputFilter?.enabled !== false
-        ? buildPrivacyHeimdallConfig(heimdallCfg, selectedModelLabel)
-        : heimdallCfg;
-    blockReplyCallback = wrapBlockReplyWithFilter(blockReplyCallback, streamCfg);
+    blockReplyCallback = wrapBlockReplyWithFilter(blockReplyCallback, heimdallCfg);
   }
   const blockReplyPipeline =
     blockStreamingEnabled && blockReplyCallback
@@ -759,14 +714,9 @@ export async function runReplyAgent(params: {
     }
 
     // Heimdall FILTER: redact secrets from outbound reply payloads (batch).
-    // When needsPrivacyFilter, also strip model identifiers using the actual model used
-    // (post-fallback) so even fallback model names are redacted.
     if (heimdallCfg?.enabled && heimdallCfg.outputFilter?.enabled !== false) {
       const { applyOutputFilter } = await import("../../security/heimdall/apply-filter.js");
-      const batchCfg = needsPrivacyFilter
-        ? buildPrivacyHeimdallConfig(heimdallCfg, `${providerUsed}/${modelUsed}`)
-        : heimdallCfg;
-      finalPayloads = applyOutputFilter(finalPayloads, batchCfg);
+      finalPayloads = applyOutputFilter(finalPayloads, heimdallCfg);
     }
 
     // Post-compaction read audit (Layer 3)

@@ -9,38 +9,24 @@
  */
 
 import safeRegex from "safe-regex2";
+import { DEPLOYMENT_PATTERNS } from "./patterns.js";
 import type {
   OutputFilterConfig,
   OutputFilterPattern,
   RedactionMatch,
   RedactionResult,
 } from "./types.js";
-import { DEPLOYMENT_PATTERNS } from "./patterns.js";
-
-// Generic context-anchored patterns (key=value) must run LAST — they consume the
-// entire prefix+value and would prevent specific patterns (gho_, ghp_, sk-proj-,
-// etc.) from matching the token value. Separate them so specific patterns always run first.
-const DEPLOYMENT_SPECIFIC = DEPLOYMENT_PATTERNS.filter(
-  (p) => p.name !== "Generic API Key Assignment" && p.name !== "Generic Secret Assignment",
-);
-const DEPLOYMENT_GENERIC = DEPLOYMENT_PATTERNS.filter(
-  (p) => p.name === "Generic API Key Assignment" || p.name === "Generic Secret Assignment",
-);
 
 export const BUILTIN_PATTERNS: OutputFilterPattern[] = [
-  // Provider-specific deployment patterns first (Telegram, Anthropic, Slack, etc.)
-  // Anthropic (sk-ant-) must precede the OpenAI (sk-) pattern below.
-  ...DEPLOYMENT_SPECIFIC,
-  // Token-value patterns — must run before generic key=value patterns.
+  // DEPLOYMENT_PATTERNS first: more specific patterns (sk-ant-, xox*-, etc.)
+  // must match before the generic sk- pattern to ensure correct attribution.
+  ...DEPLOYMENT_PATTERNS,
   { name: "OpenAI API Key", regex: "sk-(?!ant-)[a-zA-Z0-9_\\-]{20,}", flags: "g" },
   { name: "GitHub PAT", regex: "ghp_[a-zA-Z0-9]{36,}", flags: "g" },
   { name: "GitHub OAuth", regex: "gho_[a-zA-Z0-9]{36,}", flags: "g" },
   { name: "GitHub App", regex: "ghs_[a-zA-Z0-9]{36,}", flags: "g" },
   { name: "Bearer Token", regex: "Bearer\\s+[a-zA-Z0-9._\\-]{20,}", flags: "g" },
   { name: "AWS Access Key", regex: "AKIA[A-Z0-9]{16}", flags: "g" },
-  // Generic context-anchored patterns LAST — must not consume prefix+value
-  // before specific patterns have matched the token value itself.
-  ...DEPLOYMENT_GENERIC,
 ];
 
 /** Self-test: validate all built-in patterns are safe from ReDoS at load time. */
