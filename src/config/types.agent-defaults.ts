@@ -252,6 +252,8 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /** Heimdall security layer config. Fork patch: feat/heimdall-security. */
+  heimdall?: import("../security/heimdall/types.js").HeimdallConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";
@@ -269,6 +271,12 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /** Override model for compaction summarization (provider/model). Fork patch: feat/compaction-timeout-model-override. */
+  model?: string;
+  /** Compaction timeout in milliseconds. Fork patch: feat/compaction-timeout-model-override. */
+  timeoutMs?: number;
+  /** When true, use model override for compaction. Fork patch: feat/compaction-timeout-model-override. */
+  overrideModel?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

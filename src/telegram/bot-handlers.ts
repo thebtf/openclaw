@@ -316,7 +316,7 @@ export const registerTelegramHandlers = ({
           );
           continue;
         }
-        if (media) {
+        if (media?.path) {
           allMedia.push({
             path: media.path,
             contentType: media.contentType,
