@@ -461,6 +461,159 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
+
+  it("classifies Node.js fetch/network errors as timeout", () => {
+    expect(classifyFailoverReason("fetch failed")).toBe("timeout");
+    expect(classifyFailoverReason("TypeError: fetch failed")).toBe("timeout");
+    expect(classifyFailoverReason("network error")).toBe("timeout");
+    expect(classifyFailoverReason("socket hang up")).toBe("timeout");
+    expect(classifyFailoverReason("stream disconnect")).toBe("timeout");
+    expect(classifyFailoverReason("connection refused")).toBe("timeout");
+  });
+
+  it("classifies proxy auth errors as auth", () => {
+    expect(classifyFailoverReason("auth_unavailable: no auth available")).toBe("auth");
+    expect(classifyFailoverReason("auth unavailable")).toBe("auth");
+    expect(classifyFailoverReason("no auth available")).toBe("auth");
+  });
+
+  it("classifies JSON-wrapped errors by numeric HTTP code", () => {
+    // "overloaded" in message text matches isOverloadedErrorMessage → rate_limit (correct: cooldown)
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":503,"message":"The model is overloaded.","status":"UNAVAILABLE"}}',
+      ),
+    ).toBe("rate_limit");
+    // Pure 503 without "overloaded" keyword → classified by numeric code as timeout
+    expect(classifyFailoverReason('{"error":{"code":503,"message":"service unavailable"}}')).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason('{"error":{"code":500,"message":"internal error"}}')).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason('{"error":{"code":429,"message":"rate limited"}}')).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReason('{"error":{"code":401,"message":"invalid key"}}')).toBe("auth");
+    expect(classifyFailoverReason('{"error":{"code":402,"message":"payment required"}}')).toBe(
+      "billing",
+    );
+  });
+
+  it("classifies JSON-wrapped errors by gRPC status string", () => {
+    expect(classifyFailoverReason('{"error":{"status":"UNAVAILABLE","message":"try again"}}')).toBe(
+      "timeout",
+    );
+    expect(
+      classifyFailoverReason('{"error":{"status":"RESOURCE_EXHAUSTED","message":"quota"}}'),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason('{"error":{"status":"UNAUTHENTICATED","message":"bad token"}}'),
+    ).toBe("auth");
+  });
+
+  it("classifies JSON-wrapped errors by inner message text", () => {
+    expect(
+      classifyFailoverReason(
+        '{"error":{"message":"auth_unavailable: no auth available","type":"proxy_error"}}',
+      ),
+    ).toBe("auth");
+  });
+
+  it("classifies JSON-wrapped errors with string codes", () => {
+    expect(classifyFailoverReason('{"error":{"code":"429","message":"quota exceeded"}}')).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReason('{"error":{"code":"503","message":"service unavailable"}}')).toBe(
+      "timeout",
+    );
+  });
+
+  it("does NOT classify HTTP 400 JSON errors (too generic)", () => {
+    expect(classifyFailoverReason('{"error":{"code":400,"message":"bad request"}}')).toBeNull();
+    expect(classifyFailoverReason('{"error":{"code":"400","message":"bad request"}}')).toBeNull();
+  });
+
+  it("classifies Google INVALID_ARGUMENT errors as format (failover-worthy)", () => {
+    // Direct Google API error
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":400,"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}',
+      ),
+    ).toBe("format");
+    // Nested via proxy (Unleashed AGM wraps inner error as message string)
+    const nestedError = JSON.stringify({
+      error: {
+        code: 400,
+        message: JSON.stringify({
+          error: {
+            code: 400,
+            message: "Request contains an invalid argument.",
+            status: "INVALID_ARGUMENT",
+          },
+        }),
+        status: "UPSTREAM_ERROR",
+      },
+    });
+    expect(classifyFailoverReason(nestedError)).toBe("format");
+    // Plain text variant
+    expect(classifyFailoverReason("LLM error: invalid argument")).toBe("format");
+  });
+
+  it("classifies OpenAI-compatible string error codes", () => {
+    // CLIProxyAPI / OpenAI format: code is a string like "internal_server_error"
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":"internal_server_error","type":"server_error","message":"EOF"}}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason('{"error":{"code":"rate_limit_error","message":"too many requests"}}'),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason('{"error":{"code":"authentication_error","message":"invalid key"}}'),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason('{"error":{"code":"insufficient_quota","message":"exceeded quota"}}'),
+    ).toBe("billing");
+  });
+
+  it("classifies by OpenAI-compatible type field when code is absent", () => {
+    expect(
+      classifyFailoverReason('{"error":{"type":"server_error","message":"unknown error"}}'),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason('{"error":{"type":"rate_limit_error","message":"slow down"}}'),
+    ).toBe("rate_limit");
+  });
+
+  it("handles whitespace and casing in type field", () => {
+    expect(classifyFailoverReason('{"error":{"type":" Server_Error ","message":"x"}}')).toBe(
+      "timeout",
+    );
+  });
+
+  it("classifies 504 Gateway Timeout as transient", () => {
+    expect(classifyFailoverReason('{"error":{"code":504,"message":"gateway timeout"}}')).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason('{"error":{"code":"504","message":"gateway timeout"}}')).toBe(
+      "timeout",
+    );
+  });
+
+  it("classifies Gemini EOF error from CLIProxyAPI", () => {
+    const geminiEof = JSON.stringify({
+      error: {
+        message:
+          'Post "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent": EOF',
+        type: "server_error",
+        code: "internal_server_error",
+      },
+    });
+    expect(classifyFailoverReason(geminiEof)).toBe("timeout");
+  });
+
   it("classifies provider high-demand / service-unavailable messages as rate_limit", () => {
     expect(
       classifyFailoverReason(
