@@ -1,5 +1,5 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
-import { type ChunkMode, chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
@@ -462,7 +462,7 @@ export async function resolveMedia(
           });
         }
         return {
-          path: saved?.path ?? "",
+          path: saved?.path || undefined,
           contentType: saved?.contentType,
           placeholder: "<media:sticker>",
           stickerMetadata: {
@@ -699,11 +699,7 @@ async function sendTelegramText(
  * Returns saved file info or null if no thumbnail is available.
  */
 async function downloadStickerThumbnail(
-  sticker: {
-    thumbnail?: { file_id: string };
-    is_video?: boolean;
-    is_animated?: boolean;
-  },
+  sticker: { thumbnail?: { file_id: string }; is_video?: boolean; is_animated?: boolean },
   token: string,
   fetchImpl: typeof fetch,
   maxBytes: number,
@@ -729,11 +725,7 @@ async function downloadStickerThumbnail(
       return null;
     }
     const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
-    const fetched = await fetchRemoteMedia({
-      url,
-      fetchImpl,
-      filePathHint: filePath,
-    });
+    const fetched = await fetchRemoteMedia({ url, fetchImpl, filePathHint: filePath });
     const originalName = fetched.fileName ?? filePath;
     return await saveMediaBuffer(
       fetched.buffer,
