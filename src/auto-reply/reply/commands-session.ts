@@ -1,10 +1,9 @@
+import { listAllRunningSessions } from "../../agents/bash-process-registry.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import { killProcessTree } from "../../agents/shell-utils.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { CommandHandler } from "./commands-types.js";
-import { listAllRunningSessions } from "../../agents/bash-process-registry.js";
-import { killProcessTree } from "../../agents/shell-utils.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import {
   formatThreadBindingTtlLabel,
@@ -26,6 +25,7 @@ import {
   setAbortMemory,
   stopSubagentsForRequester,
 } from "./abort.js";
+import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 
 function resolveAbortTarget(params: {
