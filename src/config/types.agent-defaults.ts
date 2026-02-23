@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { HeimdallConfig } from "../security/heimdall/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type {
   BlockStreamingChunkConfig,
@@ -250,10 +251,10 @@ export type AgentDefaultsConfig = {
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
   };
+  /** Heimdall security layer (deterministic tool ACL, output redaction, input sanitization). */
+  heimdall?: HeimdallConfig;
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
-  /** Heimdall security layer config. Fork patch: feat/heimdall-security. */
-  heimdall?: import("../security/heimdall/types.js").HeimdallConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";
