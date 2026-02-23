@@ -44,14 +44,28 @@ export function isModelInCooldown(provider: string, model: string): boolean {
 }
 
 /**
- * Marks a model in cooldown with the same exponential backoff schedule used
- * for auth-profile cooldowns: 1 min → 5 min → 25 min → 1 hr (max).
+ * Maximum cooldown for proxy-model-level rate limits.
+ *
+ * Proxy/aggregator rate limits are transient — a model typically recovers
+ * within a minute or two.  The auth-profile formula (1 min → 5 min → 25 min
+ * → 1 hr) was designed for billing/credential failures and is too aggressive
+ * here.  We keep the exponential base but cap at 5 minutes so a model never
+ * sits out longer than necessary.
+ */
+const PROXY_MODEL_COOLDOWN_CAP_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Marks a model in cooldown with exponential backoff capped at 5 minutes.
+ * Schedule: 1 min → 5 min → 5 min (cap).
  */
 export function markModelCooldown(provider: string, model: string): void {
   const key = makeModelCooldownKey(provider, model);
   const existing = modelCooldownStore.get(key) ?? { cooldownUntil: 0, errorCount: 0 };
   const nextErrorCount = existing.errorCount + 1;
-  const cooldownMs = calculateAuthProfileCooldownMs(nextErrorCount);
+  const cooldownMs = Math.min(
+    calculateAuthProfileCooldownMs(nextErrorCount),
+    PROXY_MODEL_COOLDOWN_CAP_MS,
+  );
   modelCooldownStore.set(key, {
     cooldownUntil: Date.now() + cooldownMs,
     errorCount: nextErrorCount,
