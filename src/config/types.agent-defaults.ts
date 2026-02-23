@@ -1,16 +1,11 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { HeimdallConfig } from "../security/heimdall/types.js";
+import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
-import type {
-  SandboxBrowserSettings,
-  SandboxDockerSettings,
-  SandboxPruneSettings,
-} from "./types.sandbox.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentModelEntryConfig = {
@@ -242,49 +237,21 @@ export type AgentDefaultsConfig = {
   subagents?: {
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
     maxConcurrent?: number;
-    /** Maximum depth allowed for sessions_spawn chains. Default behavior: 2 (allows nested spawns). */
+    /** Maximum depth allowed for sessions_spawn chains. Default behavior: 1 (no nested spawns). */
     maxSpawnDepth?: number;
     /** Maximum active children a single requester session may spawn. Default behavior: 5. */
     maxChildrenPerAgent?: number;
     /** Auto-archive sub-agent sessions after N minutes (default: 60). */
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
-    model?: string | { primary?: string; fallbacks?: string[] };
+    model?: AgentModelConfig;
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
+    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
+    announceTimeoutMs?: number;
   };
-  /** Heimdall security layer (deterministic tool ACL, output redaction, input sanitization). */
-  heimdall?: HeimdallConfig;
   /** Optional sandbox settings for non-main sessions. */
-  sandbox?: {
-    /** Enable sandboxing for sessions. */
-    mode?: "off" | "non-main" | "all";
-    /**
-     * Agent workspace access inside the sandbox.
-     * - "none": do not mount the agent workspace into the container; use a sandbox workspace under workspaceRoot
-     * - "ro": mount the agent workspace read-only; disables write/edit tools
-     * - "rw": mount the agent workspace read/write; enables write/edit tools
-     */
-    workspaceAccess?: "none" | "ro" | "rw";
-    /**
-     * Session tools visibility for sandboxed sessions.
-     * - "spawned": only allow session tools to target the current session and sessions spawned from it (default)
-     * - "all": allow session tools to target any session
-     */
-    sessionToolsVisibility?: "spawned" | "all";
-    /** Container/workspace scope for sandbox isolation. */
-    scope?: "session" | "agent" | "shared";
-    /** Legacy alias for scope ("session" when true, "shared" when false). */
-    perSession?: boolean;
-    /** Root directory for sandbox workspaces. */
-    workspaceRoot?: string;
-    /** Docker-specific sandbox settings. */
-    docker?: SandboxDockerSettings;
-    /** Optional sandboxed browser settings. */
-    browser?: SandboxBrowserSettings;
-    /** Auto-prune sandbox containers. */
-    prune?: SandboxPruneSettings;
-  };
+  sandbox?: AgentSandboxConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";
@@ -302,12 +269,6 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
-  /** Timeout in ms for compaction summarization (default: 120000). */
-  timeoutMs?: number;
-  /** Model override for compaction (e.g. "openai/gpt-4o-mini"). */
-  model?: string;
-  /** Enable the model override (default: false). When false, the primary model is used. */
-  overrideModel?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

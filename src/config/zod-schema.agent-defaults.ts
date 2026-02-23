@@ -11,6 +11,7 @@ import {
   BlockStreamingCoalesceSchema,
   CliBackendSchema,
   HumanDelaySchema,
+  TypingModeSchema,
 } from "./zod-schema.core.js";
 
 export const AgentDefaultsSchema = z
@@ -134,14 +135,7 @@ export const AgentDefaultsSchema = z
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
-    typingMode: z
-      .union([
-        z.literal("never"),
-        z.literal("instant"),
-        z.literal("thinking"),
-        z.literal("message"),
-      ])
-      .optional(),
+    typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
@@ -154,7 +148,7 @@ export const AgentDefaultsSchema = z
           .max(5)
           .optional()
           .describe(
-            "Maximum nesting depth for sub-agent spawning. Default is 2 (sub-agents can spawn sub-sub-agents).",
+            "Maximum nesting depth for sub-agent spawning. 1 = no nesting (default), 2 = sub-agents can spawn sub-sub-agents.",
           ),
         maxChildrenPerAgent: z
           .number()
@@ -168,6 +162,7 @@ export const AgentDefaultsSchema = z
         archiveAfterMinutes: z.number().int().positive().optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
+        announceTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

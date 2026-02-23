@@ -1,7 +1,3 @@
-import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
-import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -9,6 +5,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -24,6 +21,7 @@ import {
   resolveHooksGmailModel,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
@@ -37,11 +35,13 @@ import {
 } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionTranscriptPath,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
@@ -55,6 +55,7 @@ import {
   isExternalHookSession,
 } from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,
@@ -75,9 +76,9 @@ import {
 
 function matchesMessagingToolDeliveryTarget(
   target: MessagingToolSend,
-  delivery: { channel: string; to?: string; accountId?: string },
+  delivery: { channel?: string; to?: string; accountId?: string },
 ): boolean {
-  if (!delivery.to || !target.to) {
+  if (!delivery.channel || !delivery.to || !target.to) {
     return false;
   }
   const channel = delivery.channel.trim().toLowerCase();
@@ -154,10 +155,20 @@ export async function runCronIsolatedAgentTurn(params: {
   deps: CliDeps;
   job: CronJob;
   message: string;
+  abortSignal?: AbortSignal;
+  signal?: AbortSignal;
   sessionKey: string;
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  const abortSignal = params.abortSignal ?? params.signal;
+  const isAborted = () => abortSignal?.aborted === true;
+  const abortReason = () => {
+    const reason = abortSignal?.reason;
+    return typeof reason === "string" && reason.trim()
+      ? reason.trim()
+      : "cron: job execution timed out";
+  };
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const requestedAgentId =
@@ -268,6 +279,8 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
+    // Isolated cron runs must not carry prior turn context across executions.
+    forceNew: params.job.sessionTarget === "isolated",
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
@@ -431,6 +444,21 @@ export async function runCronIsolatedAgentTurn(params: {
   cronSession.sessionEntry.systemSent = true;
   await persistSessionEntry();
 
+  // Resolve auth profile for the session, mirroring the inbound auto-reply path
+  // (get-reply-run.ts). Without this, isolated cron sessions fall back to env-var
+  // auth which may not match the configured auth-profiles, causing 401 errors.
+  const authProfileId = await resolveSessionAuthProfileOverride({
+    cfg: cfgWithAgentDefaults,
+    provider,
+    agentDir,
+    sessionEntry: cronSession.sessionEntry,
+    sessionStore: cronSession.store,
+    sessionKey: agentSessionKey,
+    storePath: cronSession.storePath,
+    isNewSession: cronSession.isNewSession,
+  });
+  const authProfileIdSource = cronSession.sessionEntry.authProfileOverrideSource;
+
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
   let fallbackModel = model;
@@ -454,6 +482,9 @@ export async function runCronIsolatedAgentTurn(params: {
       agentDir,
       fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
       run: (providerOverride, modelOverride) => {
+        if (abortSignal?.aborted) {
+          throw new Error(abortReason());
+        }
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
           const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
           return runCliAgent({
@@ -479,6 +510,7 @@ export async function runCronIsolatedAgentTurn(params: {
           messageChannel,
           agentAccountId: resolvedDelivery.accountId,
           sessionFile,
+          agentDir,
           workspaceDir,
           config: cfgWithAgentDefaults,
           skillsSnapshot,
@@ -486,15 +518,15 @@ export async function runCronIsolatedAgentTurn(params: {
           lane: params.lane ?? "cron",
           provider: providerOverride,
           model: modelOverride,
+          authProfileId,
+          authProfileIdSource,
           thinkLevel,
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,
           runId: cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: true,
           disableMessageTool: deliveryRequested,
-          // Task 2.2: Mark cron jobs as internal runtime calls (SYSTEM tier).
-          internal: true,
-          senderIsOwner: true, // Keep for now (legacy tool policy, removed in future)
+          abortSignal,
         });
       },
     });
@@ -504,6 +536,10 @@ export async function runCronIsolatedAgentTurn(params: {
     runEndedAt = Date.now();
   } catch (err) {
     return withRunSession({ status: "error", error: String(err) });
+  }
+
+  if (isAborted()) {
+    return withRunSession({ status: "error", error: abortReason() });
   }
 
   const payloads = runResult.payloads ?? [];
@@ -561,6 +597,10 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     await persistSessionEntry();
   }
+
+  if (isAborted()) {
+    return withRunSession({ status: "error", error: abortReason(), ...telemetry });
+  }
   const firstText = payloads[0]?.text ?? "";
   let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   let outputText = pickLastNonEmptyTextFromPayloads(payloads);
@@ -609,8 +649,7 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
-    if (!resolvedDelivery.to) {
-      const message = "cron delivery target is missing";
+    const failOrWarnMissingDeliveryField = (message: string) => {
       if (!deliveryBestEffort) {
         return withRunSession({
           status: "error",
@@ -622,6 +661,12 @@ export async function runCronIsolatedAgentTurn(params: {
       }
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+    };
+    if (!resolvedDelivery.channel) {
+      return failOrWarnMissingDeliveryField("cron delivery channel is missing");
+    }
+    if (!resolvedDelivery.to) {
+      return failOrWarnMissingDeliveryField("cron delivery target is missing");
     }
     const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
 
@@ -629,7 +674,13 @@ export async function runCronIsolatedAgentTurn(params: {
     // follows the same system-message injection path as subagent completions.
     // Keep direct outbound delivery only for structured payloads (media/channel
     // data), which cannot be represented by the shared announce flow.
-    if (deliveryPayloadHasStructuredContent) {
+    //
+    // Forum/topic targets should also use direct delivery. Announce flow can
+    // be swallowed by ANNOUNCE_SKIP/NO_REPLY in the target agent turn, which
+    // silently drops cron output for topic-bound sessions.
+    const useDirectDelivery =
+      deliveryPayloadHasStructuredContent || resolvedDelivery.threadId != null;
+    if (useDirectDelivery) {
       try {
         const payloadsForDelivery =
           deliveryPayloads.length > 0
@@ -638,6 +689,9 @@ export async function runCronIsolatedAgentTurn(params: {
               ? [{ text: synthesizedText }]
               : [];
         if (payloadsForDelivery.length > 0) {
+          if (isAborted()) {
+            return withRunSession({ status: "error", error: abortReason(), ...telemetry });
+          }
           const deliveryResults = await deliverOutboundPayloads({
             cfg: cfgWithAgentDefaults,
             channel: resolvedDelivery.channel,
@@ -649,6 +703,7 @@ export async function runCronIsolatedAgentTurn(params: {
             identity,
             bestEffort: deliveryBestEffort,
             deps: createOutboundSendDeps(params.deps),
+            abortSignal,
           });
           delivered = deliveryResults.length > 0;
         }
@@ -728,9 +783,12 @@ export async function runCronIsolatedAgentTurn(params: {
         return withRunSession({ status: "ok", summary, outputText, ...telemetry });
       }
       if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
-        return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+        return withRunSession({ status: "ok", summary, outputText, delivered: true, ...telemetry });
       }
       try {
+        if (isAborted()) {
+          return withRunSession({ status: "error", error: abortReason(), ...telemetry });
+        }
         const didAnnounce = await runSubagentAnnounceFlow({
           childSessionKey: agentSessionKey,
           childRunId: `${params.job.id}:${runSessionId}`,
@@ -751,6 +809,7 @@ export async function runCronIsolatedAgentTurn(params: {
           endedAt: runEndedAt,
           outcome: { status: "ok" },
           announceType: "cron job",
+          signal: abortSignal,
         });
         if (didAnnounce) {
           delivered = true;

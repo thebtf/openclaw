@@ -1,8 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -32,7 +29,10 @@ import {
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { TemplateContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.js";
+import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
@@ -157,6 +157,9 @@ export async function runAgentTurnWithFallback(params: {
         return { text: sanitized, skip: false };
       };
       const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
+        if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
+          return undefined;
+        }
         const { text, skip } = normalizeStreamingText(payload);
         if (skip || !text) {
           return undefined;

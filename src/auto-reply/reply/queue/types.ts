@@ -55,7 +55,6 @@ export type FollowupRun = {
     senderName?: string;
     senderUsername?: string;
     senderE164?: string;
-    /** True when the sender is the account owner (used by privacy filter). */
     senderIsOwner?: boolean;
     sessionFile: string;
     workspaceDir: string;

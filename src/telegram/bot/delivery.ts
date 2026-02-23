@@ -379,6 +379,7 @@ export async function resolveMedia(
       url,
       fetchImpl,
       filePathHint: filePath,
+      maxBytes,
     });
     // Prefer the caller-supplied original filename (e.g. msg.document.file_name),
     // then Content-Disposition (rarely set by Telegram), then Telegram's internal path.

@@ -17,6 +17,8 @@ __pycache__/
 ui/src/ui/__screenshots__/
 ui/playwright-report/
 ui/test-results/
+packages/dashboard-next/.next/
+packages/dashboard-next/out/
 
 # Mise configuration files
 mise.toml
@@ -99,6 +101,6 @@ package-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
-
-# Agent session state (session-specific, noisy in diffs)
-.agent/CONTINUITY.md
+# Generated protocol schema (produced via pnpm protocol:gen)
+dist/protocol.schema.json
+.ant-colony/

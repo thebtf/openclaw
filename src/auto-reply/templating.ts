@@ -59,6 +59,13 @@ export type MsgContext = {
   ReplyToBody?: string;
   ReplyToSender?: string;
   ReplyToIsQuote?: boolean;
+  /** Forward origin from the reply target (when reply_to_message is a forwarded message). */
+  ReplyToForwardedFrom?: string;
+  ReplyToForwardedFromType?: string;
+  ReplyToForwardedFromId?: string;
+  ReplyToForwardedFromUsername?: string;
+  ReplyToForwardedFromTitle?: string;
+  ReplyToForwardedDate?: number;
   ForwardedFrom?: string;
   ForwardedFromType?: string;
   ForwardedFromId?: string;
@@ -98,8 +105,6 @@ export type MsgContext = {
   GroupSubject?: string;
   /** Human label for channel-like group conversations (e.g. #general, #support). */
   GroupChannel?: string;
-  /** Channel topic/description (trusted metadata for new session context). */
-  ChannelTopic?: string;
   GroupSpace?: string;
   GroupMembers?: string;
   GroupSystemPrompt?: string;

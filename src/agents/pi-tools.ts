@@ -7,14 +7,10 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
-import type { ModelAuthMode } from "./model-auth.js";
-import type { AnyAgentTool } from "./pi-tools.types.js";
-import type { SandboxContext } from "./sandbox.js";
+import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
-import { resolveSenderTier } from "../security/heimdall/sender-tier.js";
-import type { SenderTier } from "../security/heimdall/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -26,6 +22,7 @@ import {
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
+import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
@@ -45,9 +42,12 @@ import {
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
   wrapToolWorkspaceRootGuard,
+  wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
+import type { SandboxContext } from "./sandbox.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import {
   applyToolPolicyPipeline,
@@ -106,6 +106,11 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     node: agentExec?.node ?? globalExec?.node,
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
+    safeBinTrustedDirs: agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
+    safeBinProfiles: resolveMergedSafeBinProfileFixtures({
+      global: globalExec,
+      local: agentExec,
+    }),
     backgroundMs: agentExec?.backgroundMs ?? globalExec?.backgroundMs,
     timeoutSec: agentExec?.timeoutSec ?? globalExec?.timeoutSec,
     approvalRunningNoticeMs:
@@ -164,6 +169,7 @@ export const __testing = {
 } as const;
 
 export function createOpenClawCodingTools(options?: {
+  agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
   agentAccountId?: string;
@@ -215,19 +221,8 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
-  /**
-   * Whether the sender is an owner (required for owner-only tools).
-   * DEPRECATED: Use `internal` flag instead for new code.
-   * This property overrides `internal` flag for backward compatibility (Task 2.3 will remove this).
-   */
+  /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
-  /**
-   * If true, this call originates from trusted internal runtime (cron, CLI, heartbeat).
-   * Maps to `isTrustedInternal` for Heimdall SYSTEM tier resolution.
-   * When true AND Heimdall enabled, results in SYSTEM tier (limited privileges).
-   * Currently overridden by senderIsOwner for backward compatibility.
-   */
-  internal?: boolean;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -244,6 +239,7 @@ export function createOpenClawCodingTools(options?: {
   } = resolveEffectiveToolPolicy({
     config: options?.config,
     sessionKey: options?.sessionKey,
+    agentId: options?.agentId,
     modelProvider: options?.modelProvider,
     modelId: options?.modelId,
   });
@@ -325,7 +321,13 @@ export function createOpenClawCodingTools(options?: {
           modelContextWindowTokens: options?.modelContextWindowTokens,
           imageSanitization,
         });
-        return [workspaceOnly ? wrapToolWorkspaceRootGuard(sandboxed, sandboxRoot) : sandboxed];
+        return [
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
+                containerWorkdir: sandbox.containerWorkdir,
+              })
+            : sandboxed,
+        ];
       }
       const freshReadTool = createReadTool(workspaceRoot);
       const wrapped = createOpenClawReadTool(freshReadTool, {
@@ -362,14 +364,20 @@ export function createOpenClawCodingTools(options?: {
     return [tool];
   });
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
+  // Fail-closed baseline: when no sandbox context exists, default exec to gateway
+  // so we never silently treat "sandbox" as host execution.
+  const resolvedExecHost =
+    options?.exec?.host ?? execConfig.host ?? (sandbox ? "sandbox" : "gateway");
   const execTool = createExecTool({
     ...execDefaults,
-    host: options?.exec?.host ?? execConfig.host,
+    host: resolvedExecHost,
     security: options?.exec?.security ?? execConfig.security,
     ask: options?.exec?.ask ?? execConfig.ask,
     node: options?.exec?.node ?? execConfig.node,
     pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
     safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
+    safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
+    safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
     agentId,
     cwd: workspaceRoot,
     allowBackground,
@@ -413,15 +421,21 @@ export function createOpenClawCodingTools(options?: {
       ? allowWorkspaceWrites
         ? [
             workspaceOnly
-              ? wrapToolWorkspaceRootGuard(
+              ? wrapToolWorkspaceRootGuardWithOptions(
                   createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
                   sandboxRoot,
+                  {
+                    containerWorkdir: sandbox.containerWorkdir,
+                  },
                 )
               : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
             workspaceOnly
-              ? wrapToolWorkspaceRootGuard(
+              ? wrapToolWorkspaceRootGuardWithOptions(
                   createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
                   sandboxRoot,
+                  {
+                    containerWorkdir: sandbox.containerWorkdir,
+                  },
                 )
               : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
           ]
@@ -474,28 +488,6 @@ export function createOpenClawCodingTools(options?: {
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-
-  // Heimdall GATE: resolve sender tier for runtime tool ACL.
-  const heimdallCfg = options?.config?.agents?.defaults?.heimdall;
-  let senderTier: SenderTier | undefined;
-  if (heimdallCfg?.enabled) {
-    // If no senderId, infer from senderIsOwner (e.g. cron runs).
-    const effectiveSenderId = options?.senderId ?? (senderIsOwner ? "cron" : "unknown");
-
-    // Task 2.2: Map internal flag → isTrustedInternal for SYSTEM tier.
-    const isTrustedInternal = options?.internal === true;
-
-    senderTier = resolveSenderTier(
-      effectiveSenderId,
-      options?.senderUsername ?? undefined,
-      heimdallCfg,
-      undefined, // allowFrom (not applicable here)
-      isTrustedInternal,
-    );
-    // Task 2.3: OWNER override removed. Internal calls now use SYSTEM tier (least privilege).
-    // Legacy senderIsOwner still passed to applyOwnerOnlyToolPolicy for backward compat.
-  }
-
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
@@ -529,8 +521,6 @@ export function createOpenClawCodingTools(options?: {
       agentId,
       sessionKey: options?.sessionKey,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-      senderTier,
-      heimdallConfig: heimdallCfg,
     }),
   );
   const withAbort = options?.abortSignal
