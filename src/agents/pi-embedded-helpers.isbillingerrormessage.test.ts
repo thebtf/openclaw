@@ -437,6 +437,32 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason('{"error":{"code":"400","message":"bad request"}}')).toBeNull();
   });
 
+  it("classifies Google INVALID_ARGUMENT errors as format (failover-worthy)", () => {
+    // Direct Google API error
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":400,"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}',
+      ),
+    ).toBe("format");
+    // Nested via proxy (Unleashed AGM wraps inner error as message string)
+    const nestedError = JSON.stringify({
+      error: {
+        code: 400,
+        message: JSON.stringify({
+          error: {
+            code: 400,
+            message: "Request contains an invalid argument.",
+            status: "INVALID_ARGUMENT",
+          },
+        }),
+        status: "UPSTREAM_ERROR",
+      },
+    });
+    expect(classifyFailoverReason(nestedError)).toBe("format");
+    // Plain text variant
+    expect(classifyFailoverReason("LLM error: invalid argument")).toBe("format");
+  });
+
   it("classifies OpenAI-compatible string error codes", () => {
     // CLIProxyAPI / OpenAI format: code is a string like "internal_server_error"
     expect(
