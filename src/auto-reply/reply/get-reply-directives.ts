@@ -390,12 +390,18 @@ export async function resolveReplyDirectives(params: {
   provider = modelState.provider;
   model = modelState.model;
 
-  // When neither directive, session, nor agent config set reasoning, default to model capability (e.g. OpenRouter with reasoning: true).
+  // When neither directive, session, nor agent config set reasoning, default to model capability
+  // (e.g. OpenRouter with reasoning: true). Skip auto-enabling when thinking is
+  // active, including model-inferred defaults, or internal thinking blocks can
+  // be emitted as visible "Reasoning:" messages.
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
     (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null) ||
     agentCfg?.reasoningDefault !== undefined;
-  if (!reasoningExplicitlySet && resolvedReasoningLevel === "off") {
+  const effectiveThinkingForReasoning =
+    resolvedThinkLevel ?? (await modelState.resolveDefaultThinkingLevel());
+  const thinkingActive = effectiveThinkingForReasoning !== "off";
+  if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }
 

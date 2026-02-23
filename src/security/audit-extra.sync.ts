@@ -1,20 +1,24 @@
+import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
+import {
+  resolveSandboxConfigForAgent,
+  resolveSandboxToolPolicyForAgent,
+} from "../agents/sandbox.js";
 /**
  * Synchronous security audit collector functions.
  *
  * These functions analyze config-based security properties without I/O.
  */
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { AgentToolsConfig } from "../config/types.tools.js";
-import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
-import {
-  resolveSandboxConfigForAgent,
-  resolveSandboxToolPolicyForAgent,
-} from "../agents/sandbox.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
+import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
@@ -106,12 +110,20 @@ function addModel(models: ModelRef[], raw: unknown, source: string) {
 
 function collectModels(cfg: OpenClawConfig): ModelRef[] {
   const out: ModelRef[] = [];
-  addModel(out, cfg.agents?.defaults?.model?.primary, "agents.defaults.model.primary");
-  for (const f of cfg.agents?.defaults?.model?.fallbacks ?? []) {
+  addModel(
+    out,
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+    "agents.defaults.model.primary",
+  );
+  for (const f of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
     addModel(out, f, "agents.defaults.model.fallbacks");
   }
-  addModel(out, cfg.agents?.defaults?.imageModel?.primary, "agents.defaults.imageModel.primary");
-  for (const f of cfg.agents?.defaults?.imageModel?.fallbacks ?? []) {
+  addModel(
+    out,
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel),
+    "agents.defaults.imageModel.primary",
+  );
+  for (const f of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
     addModel(out, f, "agents.defaults.imageModel.fallbacks");
   }
 

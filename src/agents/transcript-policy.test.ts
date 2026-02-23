@@ -72,4 +72,22 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.repairToolUseResultPairing).toBe(true);
     expect(policy.allowSyntheticToolResults).toBe(true);
   });
+
+  it("enables user-turn merge for strict OpenAI-compatible providers", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "moonshot",
+      modelId: "kimi-k2.5",
+      modelApi: "openai-completions",
+    });
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("keeps OpenRouter on its existing turn-validation path", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openrouter",
+      modelId: "openai/gpt-4.1",
+      modelApi: "openai-completions",
+    });
+    expect(policy.validateAnthropicTurns).toBe(false);
+  });
 });
