@@ -27,19 +27,33 @@ export function pickFallbackThinkingLevel(params: {
   if (!raw) {
     return undefined;
   }
+
+  // Try extracting explicit supported values (e.g. "Supported values are: 'low', 'medium', 'high'")
   const supported = extractSupportedValues(raw);
-  if (supported.length === 0) {
+  if (supported.length > 0) {
+    for (const entry of supported) {
+      const normalized = normalizeThinkLevel(entry);
+      if (!normalized) {
+        continue;
+      }
+      if (params.attempted.has(normalized)) {
+        continue;
+      }
+      return normalized;
+    }
     return undefined;
   }
-  for (const entry of supported) {
-    const normalized = normalizeThinkLevel(entry);
-    if (!normalized) {
-      continue;
+
+  // Handle "Budget N is invalid" errors from thinking-only models (e.g. Gemini 3.1-pro on AGM).
+  // These models reject thinkingBudget: 0 or -1 but accept higher budgets via elevated thinking levels.
+  if (/budget\b.*\binvalid/i.test(raw) || /invalid.*\bbudget/i.test(raw)) {
+    const escalation: ThinkLevel[] = ["medium", "high"];
+    for (const level of escalation) {
+      if (!params.attempted.has(level)) {
+        return level;
+      }
     }
-    if (params.attempted.has(normalized)) {
-      continue;
-    }
-    return normalized;
   }
+
   return undefined;
 }
