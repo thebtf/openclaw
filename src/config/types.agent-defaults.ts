@@ -271,11 +271,11 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
-  /** Override model for compaction summarization (provider/model). Fork patch: feat/compaction-timeout-model-override. */
-  model?: string;
-  /** Compaction timeout in milliseconds. Fork patch: feat/compaction-timeout-model-override. */
+  /** Timeout in ms for compaction summarization (default: 120000). */
   timeoutMs?: number;
-  /** When true, use model override for compaction. Fork patch: feat/compaction-timeout-model-override. */
+  /** Model override for compaction (e.g. "openai/gpt-4o-mini"). */
+  model?: string;
+  /** Enable the model override (default: false). When false, the primary model is used. */
   overrideModel?: boolean;
 };
 
