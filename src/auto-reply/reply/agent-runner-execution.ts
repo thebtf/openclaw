@@ -38,7 +38,6 @@ import {
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
-import type { TypingSignaler } from "./typing-mode.js";
 
 export type RuntimeFallbackAttempt = {
   provider: string;
