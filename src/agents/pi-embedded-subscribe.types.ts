@@ -29,6 +29,9 @@ export type SubscribeEmbeddedPiSessionParams = {
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
   enforceFinalTag?: boolean;
+  /** Abort the run early when a failover-worthy error (rate limit, auth, etc.) is detected
+   *  during the agent stream. Prevents pi-ai internal retry from blocking the prompt. */
+  onFailoverAbort?: () => void;
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
