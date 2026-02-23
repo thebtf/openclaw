@@ -1,7 +1,8 @@
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import { isFailoverAssistantError } from "./pi-embedded-helpers/errors.js";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
@@ -70,6 +71,12 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       stream: "lifecycle",
       data: { phase: "end" },
     });
+  }
+
+  // Abort early on failover-worthy errors (rate limit, auth, billing, etc.)
+  // to prevent pi-ai's internal retry from blocking prompt() for minutes.
+  if (isError && lastAssistant && isFailoverAssistantError(lastAssistant)) {
+    ctx.params.onFailoverAbort?.();
   }
 
   ctx.flushBlockReplyBuffer();
