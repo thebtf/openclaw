@@ -13,6 +13,7 @@ const {
   formatToolFailuresSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  hasUnresolvedToolCalls,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
@@ -426,5 +427,174 @@ describe("compaction-safeguard extension model fallback", () => {
 
     // Verify early return: getApiKey should NOT have been called when both models are missing
     expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("hasUnresolvedToolCalls", () => {
+  it("returns false for empty messages", () => {
+    expect(hasUnresolvedToolCalls([])).toBe(false);
+  });
+
+  it("returns false when all tool_calls have matching tool_results", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "read_file" }],
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        isError: false,
+        content: [{ type: "text", text: "file contents" }],
+        timestamp: Date.now(),
+      },
+    ] as AgentMessage[];
+    expect(hasUnresolvedToolCalls(messages)).toBe(false);
+  });
+
+  it("returns true when assistant has tool_call with no matching tool_result", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "kg_catalog_abc", name: "kg_catalog" }],
+        timestamp: Date.now(),
+      },
+      // No tool_result — tool is still executing
+    ] as AgentMessage[];
+    expect(hasUnresolvedToolCalls(messages)).toBe(true);
+  });
+
+  it("returns true for partial: one resolved, one unresolved", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-a", name: "read_file" },
+          { type: "toolCall", id: "call-b", name: "kg_catalog" },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-a",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        timestamp: Date.now(),
+      },
+      // call-b has no result
+    ] as AgentMessage[];
+    expect(hasUnresolvedToolCalls(messages)).toBe(true);
+  });
+
+  it("returns false when there are no tool_calls at all", () => {
+    const messages = [
+      { role: "user", content: "hello", timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hi" }],
+        timestamp: Date.now(),
+      },
+    ] as AgentMessage[];
+    expect(hasUnresolvedToolCalls(messages)).toBe(false);
+  });
+});
+
+describe("compaction-safeguard unresolved tool_call guard", () => {
+  it("cancels compaction when messagesToSummarize has an in-flight tool_call", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+
+    const eventWithInFlightTool = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: "catalog these files",
+            timestamp: Date.now(),
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "kg_catalog_1771913267171_64",
+                name: "kg_catalog",
+              },
+            ],
+            timestamp: Date.now(),
+            // No matching toolResult — tool is still executing
+          },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 150_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 1000 },
+        isSplitTurn: false,
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({ sessionManager, getApiKeyMock });
+
+    const result = (await compactionHandler(eventWithInFlightTool, mockContext)) as {
+      cancel?: boolean;
+    };
+
+    // Must cancel — compacting would orphan the tool_call
+    expect(result).toEqual({ cancel: true });
+    // getApiKey must NOT be called (early return before model resolution)
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("proceeds with compaction when tool_calls are all resolved", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+
+    const eventWithResolvedTools = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-done", name: "read_file" }],
+            timestamp: Date.now(),
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-done",
+            isError: false,
+            content: [{ type: "text", text: "file contents" }],
+            timestamp: Date.now(),
+          },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 150_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 1000 },
+        isSplitTurn: false,
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({ sessionManager, getApiKeyMock });
+
+    await compactionHandler(eventWithResolvedTools, mockContext);
+
+    // getApiKey should be called — guard did not cancel early
+    expect(getApiKeyMock).toHaveBeenCalled();
   });
 });
