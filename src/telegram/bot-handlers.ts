@@ -101,7 +101,7 @@ export const registerTelegramHandlers = ({
   logger,
 }: RegisterTelegramHandlerParams) => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
-  const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
+  const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 3600;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&
     Number.isFinite(opts.testTimings.textFragmentGapMs)

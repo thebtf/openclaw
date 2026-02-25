@@ -1621,6 +1621,32 @@ describe("createTelegramBot", () => {
       expect(replySpy.mock.calls.length, testCase.name).toBe(testCase.expectedReplyCount);
     }
   });
+  it("blocks group sender not in groupAllowFrom even when sender is paired in DM store", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["222222222"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+    // Sender 123456789 is in the DM pairing store but NOT in groupAllowFrom
+    readChannelAllowFromStore.mockResolvedValue(["123456789"]);
+    resetHarnessSpies();
+
+    await dispatchMessage({
+      message: {
+        chat: { id: -100888999000, type: "group", title: "Secret Group" },
+        message_id: 9901,
+        date: 1736380900,
+        from: { id: 123456789, username: "pairedbutnot" },
+        text: "should be blocked",
+      },
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+  });
   it("sends replies without native reply threading", async () => {
     replySpy.mockResolvedValue({ text: "a".repeat(4500) });
 
@@ -1972,6 +1998,64 @@ describe("createTelegramBot", () => {
         channelPost: {
           chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
           message_id: 302,
+          date: 1736380801,
+          text: part2,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(TELEGRAM_TEST_TIMINGS.textFragmentGapMs + 100);
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0] as { RawBody?: string };
+      expect(payload.RawBody).toContain(part1.slice(0, 32));
+      expect(payload.RawBody).toContain(part2.slice(0, 32));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("aggregates fragments when first part is ~3900 chars", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    vi.useFakeTimers();
+    try {
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      const part1 = "A".repeat(3900);
+      const part2 = "B".repeat(50);
+
+      await handler({
+        channelPost: {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: 401,
+          date: 1736380800,
+          text: part1,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      await handler({
+        channelPost: {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: 402,
           date: 1736380801,
           text: part2,
         },
