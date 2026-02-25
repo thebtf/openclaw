@@ -94,6 +94,7 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapPromptWarningSignature?: string;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;
+  /** Idle timeout in ms: resets on agent activity (tool start, LLM message start). */
   timeoutMs: number;
   runId: string;
   abortSignal?: AbortSignal;
