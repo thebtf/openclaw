@@ -125,7 +125,9 @@ async function downloadAndSaveTelegramFile(params: {
   apiRoot?: string;
 }) {
   const base = getTelegramApiBase(params.apiRoot);
-  const url = `${base}/file/bot${params.token}/${params.filePath}`;
+  // Strip leading slash so absolute paths from local Bot API server (e.g.
+  // /var/lib/telegram-bot-api/.../voice/file.oga) produce a valid HTTP URL.
+  const url = `${base}/file/bot${params.token}/${params.filePath.replace(/^\/+/, "")}`;
   const fetched = await fetchRemoteMedia({
     url,
     fetchImpl: params.fetchImpl,
