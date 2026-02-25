@@ -343,7 +343,7 @@ export const registerTelegramHandlers = ({
             mediaMaxBytes,
             opts.token,
             opts.proxyFetch,
-            telegramCfg.apiRoot,
+            telegramCfg.mediaApiBase ?? telegramCfg.apiRoot,
           );
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
@@ -929,7 +929,13 @@ export const registerTelegramHandlers = ({
 
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
-      media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+      media = await resolveMedia(
+        ctx,
+        mediaMaxBytes,
+        opts.token,
+        opts.proxyFetch,
+        telegramCfg.mediaApiBase ?? telegramCfg.apiRoot,
+      );
     } catch (mediaErr) {
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {

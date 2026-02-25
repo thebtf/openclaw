@@ -399,3 +399,121 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("resolveMedia — file URL construction with apiRoot", () => {
+  const TOKEN = "test-token";
+  const MAX_BYTES = 5 * 1024 * 1024;
+
+  function makeVideoStickerCtx(): TelegramContext {
+    return {
+      message: {
+        message_id: 1,
+        date: 0,
+        chat: { id: 123, type: "private" },
+        sticker: {
+          file_id: "sticker-file-id",
+          file_unique_id: "sticker-unique-id",
+          type: "regular" as const,
+          width: 512,
+          height: 512,
+          is_animated: false,
+          is_video: true,
+          thumbnail: {
+            file_id: "thumb-file-id",
+            file_unique_id: "thumb-unique-id",
+            width: 128,
+            height: 128,
+          },
+        },
+      },
+      getFile: vi.fn(),
+    };
+  }
+
+  // proxyFetch handles the raw getFile API call inside downloadStickerThumbnail
+  function makeProxyFetch(): typeof fetch {
+    return vi.fn(async (url: string) => {
+      if (url.includes("getFile")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, result: { file_path: "thumbnails/thumb.webp" } }),
+          arrayBuffer: async () => Buffer.alloc(0).buffer,
+          headers: new Map<string, string>(),
+        };
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+        arrayBuffer: async () => Buffer.alloc(0).buffer,
+        headers: new Map<string, string>(),
+      };
+    }) as unknown as typeof fetch;
+  }
+
+  beforeEach(() => {
+    mockFetchRemoteMedia.mockReset();
+    mockSaveMediaBuffer.mockReset();
+    mockGetCachedSticker.mockReset();
+    mockCacheSticker.mockReset();
+  });
+
+  function setupSuccessfulDownload() {
+    mockGetCachedSticker.mockReturnValue(null);
+    mockFetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("thumb-data"),
+      contentType: "image/webp",
+      fileName: "thumb.webp",
+    });
+    mockSaveMediaBuffer.mockResolvedValue({ path: "/tmp/thumb.webp", contentType: "image/webp" });
+  }
+
+  it("uses api.telegram.org for file download when apiRoot is not set", async () => {
+    setupSuccessfulDownload();
+    const ctx = makeVideoStickerCtx();
+
+    await resolveMedia(ctx, MAX_BYTES, TOKEN, makeProxyFetch());
+
+    expect(mockFetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: expect.stringContaining("https://api.telegram.org/file/bot"),
+      }),
+    );
+  });
+
+  it("uses custom apiRoot for file download when apiRoot is set", async () => {
+    setupSuccessfulDownload();
+    const ctx = makeVideoStickerCtx();
+    const apiRoot = "http://custom.local:8081";
+
+    await resolveMedia(ctx, MAX_BYTES, TOKEN, makeProxyFetch(), apiRoot);
+
+    expect(mockFetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: expect.stringContaining(`${apiRoot}/file/bot`),
+      }),
+    );
+    expect(mockFetchRemoteMedia).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: expect.stringContaining("api.telegram.org"),
+      }),
+    );
+  });
+
+  it("strips trailing slashes from apiRoot before constructing file URL", async () => {
+    setupSuccessfulDownload();
+    const ctx = makeVideoStickerCtx();
+
+    await resolveMedia(ctx, MAX_BYTES, TOKEN, makeProxyFetch(), "http://custom.local:8081///");
+
+    expect(mockFetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: expect.stringContaining("http://custom.local:8081/file/bot"),
+      }),
+    );
+    // No double-slash artifacts from the stripped trailing slashes
+    const calledUrl: string = mockFetchRemoteMedia.mock.calls[0][0].url;
+    expect(calledUrl).not.toMatch(/\/\/\//);
+  });
+});
