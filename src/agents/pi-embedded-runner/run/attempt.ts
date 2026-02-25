@@ -1505,7 +1505,10 @@ export async function runEmbeddedAttempt(
       let abortWarnTimer: NodeJS.Timeout | undefined;
       let watchdogTimer: NodeJS.Timeout | undefined;
       let hardCapTimer: NodeJS.Timeout | undefined;
-      // Forward ref: assigned after subscription is created so the closure can access it.
+      let timeoutFired = false;
+      // Forward ref: onRunTimeout needs subscription.isCompacting() which isn't available yet.
+      // Safe: resetWatchdog only schedules a setTimeout(>=60s); by the time it fires,
+      // onRunTimeout is guaranteed to be assigned (JS event loop, synchronous assignment below).
       let onRunTimeout: ((kind: "idle" | "hard-cap") => void) | undefined;
 
       const resetWatchdog = () => {
@@ -1567,6 +1570,11 @@ export async function runEmbeddedAttempt(
 
       // Assign the timeout fire handler now that subscription + activeSession are available.
       onRunTimeout = (kind) => {
+        // Guard against double-fire (idle + hard-cap both trigger before abort completes).
+        if (timeoutFired) {
+          return;
+        }
+        timeoutFired = true;
         if (!isProbeSession) {
           const suffix =
             kind === "idle"
