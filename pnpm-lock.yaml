@@ -18,7 +18,7 @@ overrides:
 
 patchedDependencies:
   '@mariozechner/pi-ai@0.55.0':
-    hash: e70e3a22cf8029e11da5b5fa03642262b9f88d2ac7bda57c89e8090718a59cd1
+    hash: 0f3862d8ed223deb59813b970fc8303389f668fa6b37fd1a2309373550141efc
     path: patches/@mariozechner__pi-ai@0.55.0.patch
 
 importers:
@@ -63,7 +63,7 @@ importers:
         version: 0.55.0(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-ai':
         specifier: 0.55.0
-        version: 0.55.0(patch_hash=e70e3a22cf8029e11da5b5fa03642262b9f88d2ac7bda57c89e8090718a59cd1)(ws@8.19.0)(zod@4.3.6)
+        version: 0.55.0(patch_hash=0f3862d8ed223deb59813b970fc8303389f668fa6b37fd1a2309373550141efc)(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
         specifier: 0.55.0
         version: 0.55.0(ws@8.19.0)(zod@4.3.6)
@@ -7730,7 +7730,7 @@ snapshots:
 
   '@mariozechner/pi-agent-core@0.54.1(ws@8.19.0)(zod@4.3.6)':
     dependencies:
-      '@mariozechner/pi-ai': 0.54.1(patch_hash=e70e3a22cf8029e11da5b5fa03642262b9f88d2ac7bda57c89e8090718a59cd1)(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.54.1(ws@8.19.0)(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -7742,7 +7742,7 @@ snapshots:
 
   '@mariozechner/pi-agent-core@0.55.0(ws@8.19.0)(zod@4.3.6)':
     dependencies:
-      '@mariozechner/pi-ai': 0.55.0(patch_hash=e70e3a22cf8029e11da5b5fa03642262b9f88d2ac7bda57c89e8090718a59cd1)(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.55.0(patch_hash=0f3862d8ed223deb59813b970fc8303389f668fa6b37fd1a2309373550141efc)(ws@8.19.0)(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -7776,7 +7776,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.55.0(patch_hash=e70e3a22cf8029e11da5b5fa03642262b9f88d2ac7bda57c89e8090718a59cd1)(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-ai@0.55.0(patch_hash=0f3862d8ed223deb59813b970fc8303389f668fa6b37fd1a2309373550141efc)(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.73.0(zod@4.3.6)
       '@aws-sdk/client-bedrock-runtime': 3.997.0
@@ -7804,7 +7804,7 @@ snapshots:
     dependencies:
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.54.1(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.54.1(patch_hash=e70e3a22cf8029e11da5b5fa03642262b9f88d2ac7bda57c89e8090718a59cd1)(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.54.1(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.54.1
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
@@ -7833,7 +7833,7 @@ snapshots:
     dependencies:
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.55.0(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.55.0(patch_hash=e70e3a22cf8029e11da5b5fa03642262b9f88d2ac7bda57c89e8090718a59cd1)(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.55.0(patch_hash=0f3862d8ed223deb59813b970fc8303389f668fa6b37fd1a2309373550141efc)(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.55.0
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
