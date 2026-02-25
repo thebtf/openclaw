@@ -28,6 +28,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
+  /** Called on agent activity (tool start, LLM message start). Used to reset idle watchdog timers. */
+  onActivity?: () => void;
   enforceFinalTag?: boolean;
   /** Abort the run early when a failover-worthy error (rate limit, auth, etc.) is detected
    *  during the agent stream. Prevents pi-ai internal retry from blocking the prompt. */
