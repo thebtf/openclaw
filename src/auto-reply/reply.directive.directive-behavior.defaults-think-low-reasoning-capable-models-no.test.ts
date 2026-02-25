@@ -80,6 +80,17 @@ function mockReasoningCapableCatalog() {
   ]);
 }
 
+function mockNonReasoningCatalog() {
+  vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+    {
+      id: "claude-opus-4-5",
+      name: "Opus 4.5",
+      provider: "anthropic",
+      reasoning: false,
+    },
+  ]);
+}
+
 async function runReasoningDefaultCase(params: {
   home: string;
   expectedThinkLevel: "low" | "off";
@@ -146,6 +157,28 @@ describe("directive behavior", () => {
       }
     });
   });
+  it("ignores thinkingDefault for models with reasoning:false in catalog", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+      mockEmbeddedTextResult("done");
+      mockNonReasoningCatalog();
+
+      await getReplyFromConfig(
+        { Body: "hello", From: "+1004", To: "+2000" },
+        {},
+        makeWhatsAppDirectiveConfig(home, {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          thinkingDefault: "high",
+        }),
+      );
+
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      // reasoning:false in catalog must suppress thinkingDefault:"high"
+      expect(call?.thinkLevel).toBe("off");
+    });
+  });
+
   it("renders model list and status variants across catalog/config combinations", async () => {
     await withTempHome(async (home) => {
       const aliasText = await runModelDirectiveText(home, "/model list");
