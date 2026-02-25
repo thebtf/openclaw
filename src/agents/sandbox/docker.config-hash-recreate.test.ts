@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SandboxConfig } from "./types.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { ensureSandboxContainer } from "./docker.js";
+import type { SandboxConfig } from "./types.js";
 
 type SpawnCall = {
   command: string;
@@ -101,6 +101,7 @@ function createSandboxConfig(dns: string[], binds?: string[]): SandboxConfig {
       dns,
       extraHosts: ["host.docker.internal:host-gateway"],
       binds: binds ?? ["/tmp/workspace:/workspace:rw"],
+      dangerouslyAllowReservedContainerTargets: true,
     },
     browser: {
       enabled: false,
@@ -196,6 +197,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       ["1.1.1.1"],
       ["/tmp/workspace-shared/USER.md:/workspace/USER.md:ro"],
     );
+    cfg.docker.dangerouslyAllowExternalBindSources = true;
     const expectedHash = computeSandboxConfigHash({
       docker: cfg.docker,
       workspaceAccess: cfg.workspaceAccess,

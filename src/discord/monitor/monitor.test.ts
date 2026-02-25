@@ -9,8 +9,6 @@ import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DiscordAccountConfig } from "../../config/types.discord.js";
-import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
-import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import {
   clearDiscordComponentEntries,
@@ -18,12 +16,14 @@ import {
   resolveDiscordComponentEntry,
   resolveDiscordModalEntry,
 } from "../components-registry.js";
+import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
   createDiscordComponentButton,
   createDiscordComponentModal,
 } from "./agent-components.js";
+import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {
   resolveDiscordMemberAllowed,
   resolveDiscordOwnerAllowFrom,
@@ -170,6 +170,7 @@ describe("agent components", () => {
     const select = createAgentSelectMenu({
       cfg: createCfg(),
       accountId: "default",
+      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
       dmPolicy: "allowlist",
       allowFrom: ["Alice#1234"],
     });
@@ -426,13 +427,20 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     expect(result).toEqual(["123"]);
   });
 
-  it("returns the normalized name slug for name matches", () => {
-    const result = resolveDiscordOwnerAllowFrom({
+  it("returns the normalized name slug for name matches only when enabled", () => {
+    const defaultResult = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
     });
+    expect(defaultResult).toBeUndefined();
 
-    expect(result).toEqual(["some-user"]);
+    const enabledResult = resolveDiscordOwnerAllowFrom({
+      channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
+      sender: { id: "999", name: "Some User" },
+      allowNameMatching: true,
+    });
+
+    expect(enabledResult).toEqual(["some-user"]);
   });
 });
 

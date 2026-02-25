@@ -10,11 +10,11 @@ import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
+import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
-import { MediaStreamHandler } from "./media-stream.js";
-import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
@@ -346,11 +346,15 @@ export class VoiceCallWebhookServer {
     const result = this.provider.parseWebhookEvent(ctx);
 
     // Process each event
-    for (const event of result.events) {
-      try {
-        this.manager.processEvent(event);
-      } catch (err) {
-        console.error(`[voice-call] Error processing event ${event.type}:`, err);
+    if (verification.isReplay) {
+      console.warn("[voice-call] Replay detected; skipping event side effects");
+    } else {
+      for (const event of result.events) {
+        try {
+          this.manager.processEvent(event);
+        } catch (err) {
+          console.error(`[voice-call] Error processing event ${event.type}:`, err);
+        }
       }
     }
 

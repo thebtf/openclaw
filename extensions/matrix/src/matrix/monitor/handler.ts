@@ -11,7 +11,6 @@ import {
   type RuntimeLogger,
 } from "openclaw/plugin-sdk";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
-import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
   formatPollAsText,
@@ -19,12 +18,7 @@ import {
   parsePollStartContent,
   type PollStartContent,
 } from "../poll-types.js";
-import {
-  reactMatrixMessage,
-  sendMessageMatrix,
-  sendReadReceiptMatrix,
-  sendTypingMatrix,
-} from "../send.js";
+import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send.js";
 import {
   normalizeMatrixAllowList,
   resolveMatrixAllowListMatch,
@@ -36,6 +30,7 @@ import { resolveMentions } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
+import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType, RelationType } from "./types.js";
 
 export type MatrixMonitorHandlerParams = {
@@ -600,14 +595,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (!replyTarget) {
         runtime.error?.("matrix: missing reply target");
         return;
-      }
-
-      if (messageId) {
-        sendReadReceiptMatrix(roomId, messageId, client).catch((err) => {
-          logVerboseMessage(
-            `matrix: read receipt failed room=${roomId} id=${messageId}: ${String(err)}`,
-          );
-        });
       }
 
       let didSendReply = false;

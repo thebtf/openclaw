@@ -43,6 +43,7 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.j
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import {
   auditPostCompactionReads,
   extractReadPaths,
@@ -180,11 +181,10 @@ export async function runReplyAgent(params: {
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
 
-  const replyToChannel =
-    sessionCtx.OriginatingChannel ??
-    ((sessionCtx.Surface ?? sessionCtx.Provider)?.toLowerCase() as
-      | OriginatingChannelType
-      | undefined);
+  const replyToChannel = resolveOriginMessageProvider({
+    originatingChannel: sessionCtx.OriginatingChannel,
+    provider: sessionCtx.Surface ?? sessionCtx.Provider,
+  }) as OriginatingChannelType | undefined;
   const replyToMode = resolveReplyToMode(
     followupRun.run.config,
     replyToChannel,
@@ -523,7 +523,11 @@ export async function runReplyAgent(params: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
-      originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
+      originatingChannel: sessionCtx.OriginatingChannel,
+      originatingTo: resolveOriginMessageTo({
+        originatingTo: sessionCtx.OriginatingTo,
+        to: sessionCtx.To,
+      }),
       accountId: sessionCtx.AccountId,
     });
     const { replyPayloads } = payloadResult;

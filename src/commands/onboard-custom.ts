@@ -1,10 +1,10 @@
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
 
@@ -303,7 +303,7 @@ async function requestOpenAiVerification(params: {
     body: {
       model: params.modelId,
       messages: [{ role: "user", content: "Hi" }],
-      max_tokens: 5,
+      max_tokens: 1024,
     },
   });
 }
@@ -329,7 +329,7 @@ async function requestAnthropicVerification(params: {
     headers: buildAnthropicHeaders(params.apiKey),
     body: {
       model: params.modelId,
-      max_tokens: 16,
+      max_tokens: 1024,
       messages: [{ role: "user", content: "Hi" }],
     },
   });

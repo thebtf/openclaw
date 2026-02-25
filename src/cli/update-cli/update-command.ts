@@ -1,5 +1,5 @@
-import { confirm, isCancel } from "@clack/prompts";
 import path from "node:path";
+import { confirm, isCancel } from "@clack/prompts";
 import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
@@ -589,7 +589,7 @@ async function maybeRestartService(params: {
           }
           defaultRuntime.log(
             theme.muted(
-              `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --probe --deep"), CLI_NAME)}\` for details.`,
+              `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
             ),
           );
         }

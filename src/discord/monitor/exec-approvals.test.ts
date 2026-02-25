@@ -1,11 +1,11 @@
-import type { ButtonInteraction, ComponentData } from "@buape/carbon";
-import { Routes } from "discord-api-types/v10";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ButtonInteraction, ComponentData } from "@buape/carbon";
+import { Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions.js";
+import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import {
   buildExecApprovalCustomId,
   extractDiscordChannelId,
@@ -307,6 +307,15 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     expect(handler.shouldHandle(createRequest({ sessionKey: "other:test:discord:123" }))).toBe(
       false,
     );
+  });
+
+  it("rejects unsafe nested-repetition regex in session filter", () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      sessionFilter: ["(a+)+$"],
+    });
+    expect(handler.shouldHandle(createRequest({ sessionKey: `${"a".repeat(28)}!` }))).toBe(false);
   });
 
   it("filters by discord account when session store includes account", () => {

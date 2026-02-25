@@ -106,13 +106,13 @@ export function execDockerRaw(
   });
 }
 
-import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 
 const log = createSubsystemLogger("docker");
@@ -264,9 +264,25 @@ export function buildSandboxCreateArgs(params: {
   labels?: Record<string, string>;
   configHash?: string;
   includeBinds?: boolean;
+  bindSourceRoots?: string[];
+  allowSourcesOutsideAllowedRoots?: boolean;
+  allowReservedContainerTargets?: boolean;
+  allowContainerNamespaceJoin?: boolean;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
-  validateSandboxSecurity(params.cfg);
+  validateSandboxSecurity({
+    ...params.cfg,
+    allowedSourceRoots: params.bindSourceRoots,
+    allowSourcesOutsideAllowedRoots:
+      params.allowSourcesOutsideAllowedRoots ??
+      params.cfg.dangerouslyAllowExternalBindSources === true,
+    allowReservedContainerTargets:
+      params.allowReservedContainerTargets ??
+      params.cfg.dangerouslyAllowReservedContainerTargets === true,
+    dangerouslyAllowContainerNamespaceJoin:
+      params.allowContainerNamespaceJoin ??
+      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
+  });
 
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
@@ -378,6 +394,7 @@ async function createSandboxContainer(params: {
     scopeKey,
     configHash: params.configHash,
     includeBinds: false,
+    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
   });
   args.push("--workdir", cfg.workdir);
   const mainMountSuffix =

@@ -1,6 +1,8 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { VoiceCallConfigSchema } from "./config.js";
+import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type {
   HangupCallInput,
@@ -13,15 +15,17 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "./types.js";
-import { VoiceCallConfigSchema } from "./config.js";
-import { CallManager } from "./manager.js";
 
 class FakeProvider implements VoiceCallProvider {
-  readonly name = "plivo" as const;
+  readonly name: "plivo" | "twilio";
   readonly playTtsCalls: PlayTtsInput[] = [];
   readonly hangupCalls: HangupCallInput[] = [];
   readonly startListeningCalls: StartListeningInput[] = [];
   readonly stopListeningCalls: StopListeningInput[] = [];
+
+  constructor(name: "plivo" | "twilio" = "plivo") {
+    this.name = name;
+  }
 
   verifyWebhook(_ctx: WebhookContext): WebhookVerificationResult {
     return { ok: true };
@@ -317,6 +321,61 @@ describe("CallManager", () => {
     expect(firstResult.transcript).toBe("Done");
     expect(provider.startListeningCalls).toHaveLength(1);
     expect(provider.stopListeningCalls).toHaveLength(1);
+  });
+
+  it("ignores speech events with mismatched turnToken while waiting for transcript", async () => {
+    const { manager, provider } = createManagerHarness(
+      {
+        transcriptTimeoutMs: 5000,
+      },
+      new FakeProvider("twilio"),
+    );
+
+    const started = await manager.initiateCall("+15550000004");
+    expect(started.success).toBe(true);
+
+    markCallAnswered(manager, started.callId, "evt-turn-token-answered");
+
+    const turnPromise = manager.continueCall(started.callId, "Prompt");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const expectedTurnToken = provider.startListeningCalls[0]?.turnToken;
+    expect(typeof expectedTurnToken).toBe("string");
+
+    manager.processEvent({
+      id: "evt-turn-token-bad",
+      type: "call.speech",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      transcript: "stale replay",
+      isFinal: true,
+      turnToken: "wrong-token",
+    });
+
+    const pendingState = await Promise.race([
+      turnPromise.then(() => "resolved"),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+    expect(pendingState).toBe("pending");
+
+    manager.processEvent({
+      id: "evt-turn-token-good",
+      type: "call.speech",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      transcript: "final answer",
+      isFinal: true,
+      turnToken: expectedTurnToken,
+    });
+
+    const turnResult = await turnPromise;
+    expect(turnResult.success).toBe(true);
+    expect(turnResult.transcript).toBe("final answer");
+
+    const call = manager.getCall(started.callId);
+    expect(call?.transcript.map((entry) => entry.text)).toEqual(["Prompt", "final answer"]);
   });
 
   it("tracks latency metadata across multiple closed-loop turns", async () => {

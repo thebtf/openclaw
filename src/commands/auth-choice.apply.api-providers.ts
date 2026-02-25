@@ -1,4 +1,3 @@
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import {
@@ -14,6 +13,7 @@ import {
   normalizeTokenProviderInput,
 } from "./auth-choice.apply-helpers.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyAuthChoiceOpenRouter } from "./auth-choice.apply.openrouter.js";
 import {
   applyGoogleGeminiModelDefault,
@@ -23,6 +23,8 @@ import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
+  applyKilocodeConfig,
+  applyKilocodeProviderConfig,
   applyQianfanConfig,
   applyQianfanProviderConfig,
   applyKimiCodeConfig,
@@ -50,6 +52,7 @@ import {
   applyZaiConfig,
   applyZaiProviderConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  KILOCODE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
@@ -63,6 +66,7 @@ import {
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
+  setKilocodeApiKey,
   setLitellmApiKey,
   setKimiCodingApiKey,
   setMistralApiKey,
@@ -97,6 +101,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   huggingface: "huggingface-api-key",
   mistral: "mistral-api-key",
   opencode: "opencode-zen",
+  kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
 };
 
@@ -276,6 +281,18 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
       "API key format: bce-v3/ALTAK-...",
     ].join("\n"),
     noteTitle: "QIANFAN",
+  },
+  "kilocode-api-key": {
+    provider: "kilocode",
+    profileId: "kilocode:default",
+    expectedProviders: ["kilocode"],
+    envLabel: "KILOCODE_API_KEY",
+    promptMessage: "Enter Kilo Gateway API key",
+    setCredential: setKilocodeApiKey,
+    defaultModel: KILOCODE_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyKilocodeConfig,
+    applyProviderConfig: applyKilocodeProviderConfig,
+    noteDefault: KILOCODE_DEFAULT_MODEL_REF,
   },
   "synthetic-api-key": {
     provider: "synthetic",

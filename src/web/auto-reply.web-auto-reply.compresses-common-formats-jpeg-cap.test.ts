@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
-import type { WebInboundMessage } from "./inbound.js";
 import { monitorWebChannel } from "./auto-reply.js";
 import {
   createMockWebListener,
@@ -10,6 +9,7 @@ import {
   resetLoadConfigMock,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
+import type { WebInboundMessage } from "./inbound.js";
 
 installWebAutoReplyTestHomeHooks();
 
@@ -117,7 +117,7 @@ describe("web auto-reply", () => {
     });
   }
 
-  it("compresses common formats to jpeg under the cap", { timeout: 45_000 }, async () => {
+  it("compresses common formats to jpeg under the cap", async () => {
     const formats = [
       {
         name: "png",
@@ -136,7 +136,8 @@ describe("web auto-reply", () => {
           sharp(buf, {
             raw: { width: opts.width, height: opts.height, channels: 3 },
           })
-            .jpeg({ quality: 90 })
+            // Keep source > cap with fewer pixels so the test runs faster.
+            .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
             .toBuffer(),
       },
       {
@@ -151,8 +152,8 @@ describe("web auto-reply", () => {
       },
     ] as const;
 
-    const width = 360;
-    const height = 360;
+    const width = 320;
+    const height = 320;
     const sharedRaw = crypto.randomBytes(width * height * 3);
 
     const renderedFormats = await Promise.all(

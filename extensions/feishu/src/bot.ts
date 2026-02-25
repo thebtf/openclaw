@@ -10,8 +10,6 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
-import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
-import type { DynamicAgentCreationConfig } from "./types.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { tryRecordMessagePersistent } from "./dedup.js";
@@ -33,6 +31,8 @@ import {
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
+import type { DynamicAgentCreationConfig } from "./types.js";
 
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
@@ -720,10 +720,10 @@ export async function handleFeishuMessage(params: {
     // When topicSessionMode is enabled, messages within a topic (identified by root_id)
     // get a separate session from the main group chat.
     let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
+    let topicSessionMode: "enabled" | "disabled" = "disabled";
     if (isGroup && ctx.rootId) {
       const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId });
-      const topicSessionMode =
-        groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
+      topicSessionMode = groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
       if (topicSessionMode === "enabled") {
         // Use chatId:topic:rootId as peer ID for topic-scoped sessions
         peerId = `${ctx.chatId}:topic:${ctx.rootId}`;
@@ -739,6 +739,14 @@ export async function handleFeishuMessage(params: {
         kind: isGroup ? "group" : "direct",
         id: peerId,
       },
+      // Add parentPeer for binding inheritance in topic mode
+      parentPeer:
+        isGroup && ctx.rootId && topicSessionMode === "enabled"
+          ? {
+              kind: "group",
+              id: ctx.chatId,
+            }
+          : null,
     });
 
     // Dynamic agent creation for DM users

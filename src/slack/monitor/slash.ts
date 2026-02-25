@@ -1,8 +1,6 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import type { ChatCommandDefinition, CommandArgs } from "../../auto-reply/commands-registry.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { ResolvedSlackAccount } from "../accounts.js";
-import type { SlackMonitorContext } from "./context.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
@@ -13,6 +11,7 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { chunkItems } from "../../utils/chunk-items.js";
+import type { ResolvedSlackAccount } from "../accounts.js";
 import {
   normalizeAllowList,
   normalizeAllowListLower,
@@ -21,6 +20,7 @@ import {
 } from "./allow-list.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
+import type { SlackMonitorContext } from "./context.js";
 import { normalizeSlackChannelType } from "./context.js";
 import {
   createSlackExternalArgMenuStore,
@@ -361,6 +361,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             allowList: effectiveAllowFromLower,
             id: command.user_id,
             name: senderName,
+            allowNameMatching: ctx.allowNameMatching,
           });
           const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
           if (!allowMatch.allowed) {
@@ -446,6 +447,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             allowList: channelConfig?.users,
             userId: command.user_id,
             userName: senderName,
+            allowNameMatching: ctx.allowNameMatching,
           })
         : false;
       if (channelUsersAllowlistConfigured && !channelUserAllowed) {
@@ -460,6 +462,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         allowList: effectiveAllowFromLower,
         id: command.user_id,
         name: senderName,
+        allowNameMatching: ctx.allowNameMatching,
       }).allowed;
       // DMs: allow chatting in dmPolicy=open, but keep privileged command gating intact by setting
       // CommandAuthorized based on allowlists/access-groups (downstream decides which commands need it).

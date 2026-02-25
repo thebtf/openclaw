@@ -1,15 +1,4 @@
 import fs from "node:fs";
-import type { ResolvedBrowserProfile } from "./config.js";
-import type { PwAiModule } from "./pw-ai-module.js";
-import type {
-  BrowserServerState,
-  BrowserRouteContext,
-  BrowserTab,
-  ContextOptions,
-  ProfileContext,
-  ProfileRuntimeState,
-  ProfileStatus,
-} from "./server-context.types.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { fetchJson, fetchOk } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
@@ -20,6 +9,7 @@ import {
   resolveOpenClawUserDataDir,
   stopOpenClawChrome,
 } from "./chrome.js";
+import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
 import {
   ensureChromeExtensionRelayServer,
@@ -27,14 +17,25 @@ import {
 } from "./extension-relay.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
   resolveBrowserProfileWithHotReload,
 } from "./resolved-config-refresh.js";
+import type {
+  BrowserServerState,
+  BrowserRouteContext,
+  BrowserTab,
+  ContextOptions,
+  ProfileContext,
+  ProfileRuntimeState,
+  ProfileStatus,
+} from "./server-context.types.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -176,6 +177,7 @@ function createProfileContext(
         const tabs = await listTabs().catch(() => [] as BrowserTab[]);
         const found = tabs.find((t) => t.targetId === createdViaCdp);
         if (found) {
+          await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
           return found;
         }
         await new Promise((r) => setTimeout(r, 100));
@@ -214,10 +216,12 @@ function createProfileContext(
     }
     const profileState = getProfileState();
     profileState.lastTargetId = created.id;
+    const resolvedUrl = created.url ?? url;
+    await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     return {
       targetId: created.id,
       title: created.title ?? "",
-      url: created.url ?? url,
+      url: resolvedUrl,
       wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl),
       type: created.type,
     };

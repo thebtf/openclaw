@@ -1,14 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceControlArgs,
-  GatewayServiceEnv,
-  GatewayServiceEnvArgs,
-  GatewayServiceInstallArgs,
-  GatewayServiceManageArgs,
-} from "./service-types.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayServiceDescription,
@@ -18,6 +9,15 @@ import { execFileUtf8 } from "./exec-file.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceControlArgs,
+  GatewayServiceEnv,
+  GatewayServiceEnvArgs,
+  GatewayServiceInstallArgs,
+  GatewayServiceManageArgs,
+} from "./service-types.js";
 import {
   enableSystemdUserLinger,
   readSystemdUserLingerStatus,
@@ -193,6 +193,18 @@ export async function installSystemdService({
 
   const unitPath = resolveSystemdUnitPath(env);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
+
+  // Preserve user customizations: back up existing unit file before overwriting.
+  let backedUp = false;
+  try {
+    await fs.access(unitPath);
+    const backupPath = `${unitPath}.bak`;
+    await fs.copyFile(unitPath, backupPath);
+    backedUp = true;
+  } catch {
+    // File does not exist yet — nothing to back up.
+  }
+
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const unit = buildSystemdUnit({
     description: serviceDescription,
@@ -227,6 +239,14 @@ export async function installSystemdService({
         label: "Installed systemd service",
         value: unitPath,
       },
+      ...(backedUp
+        ? [
+            {
+              label: "Previous unit backed up to",
+              value: `${unitPath}.bak`,
+            },
+          ]
+        : []),
     ],
     { leadingBlankLine: true },
   );
