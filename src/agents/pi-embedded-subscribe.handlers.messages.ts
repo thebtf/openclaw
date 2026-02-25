@@ -73,6 +73,8 @@ export function handleMessageStart(
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
+  // Signal activity so idle watchdog timers can reset.
+  ctx.params.onActivity?.();
 }
 
 export function handleMessageUpdate(

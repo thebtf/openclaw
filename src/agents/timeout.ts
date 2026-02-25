@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 600;
+const DEFAULT_MAX_RUN_TIMEOUT_SECONDS = 0; // 0 = disabled
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 const normalizeNumber = (value: unknown): number | undefined =>
@@ -45,4 +46,23 @@ export function resolveAgentTimeoutMs(opts: {
     return clampTimeoutMs(overrideSeconds * 1000);
   }
   return defaultMs;
+}
+
+/**
+ * Resolves the absolute max-run hard cap in milliseconds.
+ * Returns null when disabled (0 or not configured).
+ * When set, this is an absolute wall-clock limit regardless of agent activity.
+ */
+export function resolveMaxRunTimeoutMs(opts: {
+  cfg?: OpenClawConfig;
+  overrideSeconds?: number | null;
+}): number | null {
+  const clampTimeoutMs = (valueMs: number) => Math.min(Math.max(valueMs, 1), MAX_SAFE_TIMEOUT_MS);
+  const rawCfg = normalizeNumber(opts.cfg?.agents?.defaults?.maxRunTimeoutSeconds);
+  const rawOverride = normalizeNumber(opts.overrideSeconds);
+  const seconds = rawOverride ?? rawCfg ?? DEFAULT_MAX_RUN_TIMEOUT_SECONDS;
+  if (seconds <= 0) {
+    return null; // disabled
+  }
+  return clampTimeoutMs(seconds * 1000);
 }
