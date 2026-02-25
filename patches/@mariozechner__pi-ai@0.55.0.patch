@@ -1,0 +1,56 @@
+diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-cli.js
+index a7c6500..e586e90 100644
+--- a/dist/providers/google-gemini-cli.js
++++ b/dist/providers/google-gemini-cli.js
+@@ -610,7 +610,7 @@ export const streamSimpleGoogleGeminiCli = (model, context, options) => {
+         });
+     }
+     const effort = clampReasoning(options.reasoning);
+-    if (model.id.includes("3-pro") || model.id.includes("3-flash")) {
++    if (/3(\.\d+)?-pro/.test(model.id) || /3(\.\d+)?-flash/.test(model.id)) {
+         return streamGoogleGeminiCli(model, context, {
+             ...base,
+             thinking: {
+@@ -711,7 +711,7 @@ export function buildRequest(model, context, projectId, options = {}, isAntigrav
+     };
+ }
+ function getGeminiCliThinkingLevel(effort, modelId) {
+-    if (modelId.includes("3-pro")) {
++    if (/3(\.\d+)?-pro/.test(modelId)) {
+         switch (effort) {
+             case "minimal":
+             case "low":
+diff --git a/dist/providers/google-vertex.js b/dist/providers/google-vertex.js
+index 8bb617b..9f8d95e 100644
+--- a/dist/providers/google-vertex.js
++++ b/dist/providers/google-vertex.js
+@@ -317,10 +317,10 @@ function buildParams(model, context, options = {}) {
+     return params;
+ }
+ function isGemini3ProModel(model) {
+-    return model.id.includes("3-pro");
++    return /3(\.\d+)?-pro/.test(model.id);
+ }
+ function isGemini3FlashModel(model) {
+-    return model.id.includes("3-flash");
++    return /3(\.\d+)?-flash/.test(model.id);
+ }
+ function getGemini3ThinkingLevel(effort, model) {
+     if (isGemini3ProModel(model)) {
+diff --git a/dist/providers/google.js b/dist/providers/google.js
+index ccd384b..60bcc0b 100644
+--- a/dist/providers/google.js
++++ b/dist/providers/google.js
+@@ -298,10 +298,10 @@ function buildParams(model, context, options = {}) {
+     return params;
+ }
+ function isGemini3ProModel(model) {
+-    return model.id.includes("3-pro");
++    return /3(\.\d+)?-pro/.test(model.id);
+ }
+ function isGemini3FlashModel(model) {
+-    return model.id.includes("3-flash");
++    return /3(\.\d+)?-flash/.test(model.id);
+ }
+ function getGemini3ThinkingLevel(effort, model) {
+     if (isGemini3ProModel(model)) {

@@ -186,7 +186,6 @@
     "pdfjs-dist": "^5.4.624",
     "playwright-core": "1.58.2",
     "qrcode-terminal": "^0.12.0",
-    "safe-regex2": "^5.0.0",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.7-alpha.2",
     "tar": "7.5.9",
@@ -255,7 +254,7 @@
       "sharp"
     ],
     "patchedDependencies": {
-      "@mariozechner/pi-ai@0.54.1": "patches/@mariozechner__pi-ai@0.54.1.patch"
+      "@mariozechner/pi-ai@0.55.0": "patches/@mariozechner__pi-ai@0.55.0.patch"
     }
   }
 }
