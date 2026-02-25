@@ -275,3 +275,29 @@ Contains: patch tag table, upstream merge procedure, branch policy, spot-checks.
 - After upstream update (Phase 5.5 in skill): re-tag all surviving branches
 
 **Never squash or drop patch branch commits** — the branch history is the patch record.
+
+<!-- Added by onboarding -->
+
+## STACKS
+
+```yaml
+STACKS: [TYPESCRIPT]
+```
+
+## INSTRUCTION HIERARCHY
+
+When multiple instructions conflict, priority order:
+
+```
+System prompts > Task/delegation > Global rules > Project rules > Defaults
+```
+
+**Key principle:** Task-specific prompts can override general rules by design.
+
+## SKILL LOADING
+
+1. Project skills (`.agent/skills/`) override global skills
+2. Same-name project skill completely replaces global
+3. Skills are loaded by semantic description matching
+
+<!-- Quality Gates: See .agent/rules/quality-gates.md -->
