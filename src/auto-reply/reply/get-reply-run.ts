@@ -338,7 +338,13 @@ export async function runPreparedReply(
       prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
   }
-  if (!resolvedThinkLevel) {
+  // Always pass through the catalog-aware path unless the user explicitly set a
+  // think level via /think directive or a persisted session setting.  When the
+  // level was inherited solely from the global thinkingDefault, the model's
+  // reasoning capability (reasoning: false in catalog) must be respected.
+  const thinkFromExplicitSource =
+    directives.hasThinkDirective || Boolean(sessionEntry?.thinkingLevel);
+  if (!resolvedThinkLevel || !thinkFromExplicitSource) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
   if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
