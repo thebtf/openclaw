@@ -128,9 +128,19 @@ export type TelegramAccountConfig = {
   mediaMaxMb?: number;
   /**
    * Custom Telegram Bot API server root URL (e.g. "http://localhost:8081").
-   * Use when running a local Bot API server. Overrides the default https://api.telegram.org.
+   * Routes ALL Grammy API calls (including getUpdates long-polling) through this server.
+   * Requires the bot to be properly logged out from the official API first.
+   * Overrides the default https://api.telegram.org.
    */
   apiRoot?: string;
+  /**
+   * Base URL for downloading media files only (e.g. "http://localhost:8081").
+   * Overrides the file download base URL in delivery without affecting bot polling.
+   * Use when a local Telegram Bot API server is available for fast/large file downloads
+   * but you want polling to continue against the official api.telegram.org.
+   * Takes precedence over apiRoot for file download URL construction.
+   */
+  mediaApiBase?: string;
   /**
    * Local data directory for the local Telegram Bot API server.
    * Only relevant when apiRoot points to a local server on the same host.
