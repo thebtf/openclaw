@@ -122,6 +122,18 @@ export type TelegramAccountConfig = {
   /** @deprecated Legacy key; migrated automatically to `streaming`. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /**
+   * Custom Telegram Bot API server root URL (e.g. "http://localhost:8081").
+   * Use when running a local Bot API server. Overrides the default https://api.telegram.org.
+   */
+  apiRoot?: string;
+  /**
+   * Local data directory for the local Telegram Bot API server.
+   * Only relevant when apiRoot points to a local server on the same host.
+   * When set, file paths returned by getFile are resolved under this directory
+   * instead of being downloaded over HTTP.
+   */
+  localApiDataDir?: string;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */

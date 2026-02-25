@@ -12,6 +12,7 @@ import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
+import { getTelegramApiBase } from "../api-base.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
@@ -369,6 +370,7 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   proxyFetch?: typeof fetch,
+  apiRoot?: string,
 ): Promise<{
   path?: string;
   contentType?: string;
@@ -376,18 +378,28 @@ export async function resolveMedia(
   stickerMetadata?: StickerMetadata;
 } | null> {
   const msg = ctx.message;
+  const telegramFileBase = `${getTelegramApiBase(apiRoot)}/file/bot${token}`;
+  const ssrfPolicy = apiRoot?.trim()
+    ? {
+        ...TELEGRAM_MEDIA_SSRF_POLICY,
+        allowedHostnames: [
+          ...TELEGRAM_MEDIA_SSRF_POLICY.allowedHostnames,
+          new URL(getTelegramApiBase(apiRoot)).hostname,
+        ],
+      }
+    : TELEGRAM_MEDIA_SSRF_POLICY;
   const downloadAndSaveTelegramFile = async (
     filePath: string,
     fetchImpl: typeof fetch,
     overrideName?: string,
   ) => {
-    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const url = `${telegramFileBase}/${filePath}`;
     const fetched = await fetchRemoteMedia({
       url,
       fetchImpl,
       filePathHint: filePath,
       maxBytes,
-      ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+      ssrfPolicy,
     });
     // Prefer the caller-supplied original filename (e.g. msg.document.file_name),
     // then Content-Disposition (rarely set by Telegram), then Telegram's internal path.
@@ -419,7 +431,13 @@ export async function resolveMedia(
 
       if (isNonStatic) {
         // Animated/video stickers: download the static thumbnail
-        const thumbResult = await downloadStickerThumbnail(sticker, token, fetchImpl, maxBytes);
+        const thumbResult = await downloadStickerThumbnail(
+          sticker,
+          token,
+          fetchImpl,
+          maxBytes,
+          apiRoot,
+        );
         if (thumbResult) {
           saved = thumbResult;
         } else if (cached) {
@@ -440,7 +458,7 @@ export async function resolveMedia(
           logVerbose("telegram: getFile returned no file_path for sticker");
           return null;
         }
-        const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+        const url = `${telegramFileBase}/${file.file_path}`;
         const fetched = await fetchRemoteMedia({
           url,
           fetchImpl,
@@ -729,13 +747,15 @@ async function downloadStickerThumbnail(
   token: string,
   fetchImpl: typeof fetch,
   maxBytes: number,
+  apiRoot?: string,
 ): Promise<{ path: string; contentType?: string } | null> {
   const thumb = sticker.thumbnail;
   if (!thumb?.file_id) {
     return null;
   }
   try {
-    const getFileUrl = `https://api.telegram.org/bot${token}/getFile?file_id=${thumb.file_id}`;
+    const apiBase = getTelegramApiBase(apiRoot);
+    const getFileUrl = `${apiBase}/bot${token}/getFile?file_id=${thumb.file_id}`;
     const getFileRes = await fetchImpl(getFileUrl);
     if (!getFileRes.ok) {
       logVerbose(`telegram: getFile for thumbnail failed: ${getFileRes.status}`);
@@ -750,7 +770,7 @@ async function downloadStickerThumbnail(
       logVerbose("telegram: getFile for thumbnail returned no file_path");
       return null;
     }
-    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const url = `${apiBase}/file/bot${token}/${filePath}`;
     const fetched = await fetchRemoteMedia({ url, fetchImpl, filePathHint: filePath });
     const originalName = fetched.fileName ?? filePath;
     return await saveMediaBuffer(
