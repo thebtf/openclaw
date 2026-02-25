@@ -537,7 +537,40 @@ export async function runReplyAgent(params: {
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
+    // Compute usage footer before the empty-payloads early return so it can
+    // still be sent when block streaming dropped the final payloads.
+    const responseUsageRaw =
+      activeSessionEntry?.responseUsage ??
+      (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
+    const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
+    if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
+      const authMode = resolveModelAuthMode(providerUsed, cfg);
+      const showCost = authMode === "api-key";
+      const costConfig = showCost
+        ? resolveModelCostConfig({
+            provider: providerUsed,
+            model: modelUsed,
+            config: cfg,
+          })
+        : undefined;
+      let formatted = formatResponseUsageLine({
+        usage,
+        showCost,
+        costConfig,
+      });
+      if (formatted && responseUsageMode === "full" && sessionKey) {
+        formatted = `${formatted} · session ${sessionKey}`;
+      }
+      if (formatted) {
+        responseUsageLine = formatted;
+      }
+    }
+
     if (replyPayloads.length === 0) {
+      // When block streaming dropped final payloads, still deliver the usage footer.
+      if (responseUsageLine) {
+        return finalizeWithFollowup({ text: responseUsageLine }, queueKey, runFollowupTurn);
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -591,33 +624,6 @@ export async function runReplyAgent(params: {
         costUsd,
         durationMs: Date.now() - runStartedAt,
       });
-    }
-
-    const responseUsageRaw =
-      activeSessionEntry?.responseUsage ??
-      (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
-    const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
-    if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
-      const authMode = resolveModelAuthMode(providerUsed, cfg);
-      const showCost = authMode === "api-key";
-      const costConfig = showCost
-        ? resolveModelCostConfig({
-            provider: providerUsed,
-            model: modelUsed,
-            config: cfg,
-          })
-        : undefined;
-      let formatted = formatResponseUsageLine({
-        usage,
-        showCost,
-        costConfig,
-      });
-      if (formatted && responseUsageMode === "full" && sessionKey) {
-        formatted = `${formatted} · session ${sessionKey}`;
-      }
-      if (formatted) {
-        responseUsageLine = formatted;
-      }
     }
 
     // If verbose is enabled, prepend operational run notices.
