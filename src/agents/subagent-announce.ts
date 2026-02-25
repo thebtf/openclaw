@@ -69,13 +69,19 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
 }
 
+/**
+ * Hard cap for the findings portion of subagent completion messages.
+ * Leaves headroom for the header line and channel-specific limits (Telegram 4096).
+ */
+const MAX_FINDINGS_CHARS = 3500;
+
 function buildCompletionDeliveryMessage(params: {
   findings: string;
   subagentName: string;
   spawnMode?: SpawnSubagentMode;
   outcome?: SubagentRunOutcome;
 }): string {
-  const findingsText = params.findings.trim();
+  let findingsText = params.findings.trim();
   if (isAnnounceSkip(findingsText)) {
     return "";
   }
@@ -97,6 +103,9 @@ function buildCompletionDeliveryMessage(params: {
   })();
   if (!hasFindings) {
     return header;
+  }
+  if (findingsText.length > MAX_FINDINGS_CHARS) {
+    findingsText = findingsText.slice(0, MAX_FINDINGS_CHARS) + "\n\n[…truncated]";
   }
   return `${header}\n\n${findingsText}`;
 }
