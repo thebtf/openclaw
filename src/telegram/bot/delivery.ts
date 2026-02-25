@@ -393,7 +393,9 @@ export async function resolveMedia(
     fetchImpl: typeof fetch,
     overrideName?: string,
   ) => {
-    const url = `${telegramFileBase}/${filePath}`;
+    // Strip leading slash so absolute paths from local Bot API server (e.g.
+    // /var/lib/telegram-bot-api/.../voice/file.oga) produce a valid HTTP URL.
+    const url = `${telegramFileBase}/${filePath.replace(/^\/+/, "")}`;
     const fetched = await fetchRemoteMedia({
       url,
       fetchImpl,
