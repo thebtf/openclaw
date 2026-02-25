@@ -176,6 +176,8 @@ export async function handleToolExecutionStart(
   if (ctx.params.onBlockReplyFlush) {
     await ctx.params.onBlockReplyFlush();
   }
+  // Signal activity so idle watchdog timers can reset.
+  ctx.params.onActivity?.();
 
   const rawToolName = String(evt.toolName);
   const toolName = normalizeToolName(rawToolName);
