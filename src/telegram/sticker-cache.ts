@@ -1,22 +1,23 @@
-import type { Sticker } from "@grammyjs/types";
-import type { Bot } from "grammy";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { Sticker } from "@grammyjs/types";
+import type { Bot } from "grammy";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
 } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { STATE_DIR } from "../config/paths.js";
 import { logVerbose } from "../globals.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { resolveAutoImageModel } from "../media-understanding/runner.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { getTelegramApiBase, normalizeLocalFilePath } from "./api-base.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
@@ -375,6 +376,8 @@ export interface IndexStickerSetParams {
   fetchImpl?: typeof fetch;
   /** Explicit vision model override from config (provider/model). */
   visionModel?: string;
+  /** Telegram Bot API root URL (local server). Defaults to api.telegram.org. */
+  apiRoot?: string;
 }
 
 /**
@@ -385,13 +388,15 @@ async function downloadThumbnailForSticker(
   sticker: Sticker,
   token: string,
   fetchImpl: typeof fetch,
+  apiRoot?: string,
 ): Promise<{ path: string; contentType?: string } | null> {
   const thumb = sticker.thumbnail;
   if (!thumb?.file_id) {
     return null;
   }
   try {
-    const getFileUrl = `https://api.telegram.org/bot${token}/getFile?file_id=${thumb.file_id}`;
+    const apiBase = getTelegramApiBase(apiRoot);
+    const getFileUrl = `${apiBase}/bot${token}/getFile?file_id=${thumb.file_id}`;
     const res = await fetchImpl(getFileUrl);
     if (!res.ok) {
       return null;
@@ -401,7 +406,7 @@ async function downloadThumbnailForSticker(
     if (!filePath) {
       return null;
     }
-    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const url = `${apiBase}/file/bot${token}/${normalizeLocalFilePath(filePath, token)}`;
     const fetched = await fetchRemoteMedia({ url, fetchImpl, filePathHint: filePath });
     return await saveMediaBuffer(
       fetched.buffer,
@@ -421,7 +426,7 @@ async function downloadThumbnailForSticker(
  * Returns the number of newly cached stickers.
  */
 export async function indexStickerSet(params: IndexStickerSetParams): Promise<number> {
-  const { setName, bot, token, cfg, agentDir, agentId, fetchImpl } = params;
+  const { setName, bot, token, cfg, agentDir, agentId, fetchImpl, apiRoot } = params;
   const limit = params.limit ?? 20;
 
   if (isSetIndexed(setName)) {
@@ -451,7 +456,7 @@ export async function indexStickerSet(params: IndexStickerSetParams): Promise<nu
     const batch = toProcess.slice(i, i + SET_INDEX_BATCH_SIZE);
     const results = await Promise.allSettled(
       batch.map(async (sticker) => {
-        const thumb = await downloadThumbnailForSticker(sticker, token, resolvedFetch);
+        const thumb = await downloadThumbnailForSticker(sticker, token, resolvedFetch, apiRoot);
         if (!thumb) {
           return null;
         }

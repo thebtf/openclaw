@@ -12,7 +12,7 @@ import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
-import { getTelegramApiBase } from "../api-base.js";
+import { getTelegramApiBase, normalizeLocalFilePath } from "../api-base.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
@@ -393,9 +393,10 @@ export async function resolveMedia(
     fetchImpl: typeof fetch,
     overrideName?: string,
   ) => {
-    // Strip leading slash so absolute paths from local Bot API server (e.g.
-    // /var/lib/telegram-bot-api/.../voice/file.oga) produce a valid HTTP URL.
-    const url = `${telegramFileBase}/${filePath.replace(/^\/+/, "")}`;
+    // Normalize absolute paths from local Bot API server (e.g.
+    // /var/lib/telegram-bot-api/<token>/voice/file.oga → voice/file.oga)
+    // so the download URL is valid. Cloud relative paths pass through unchanged.
+    const url = `${telegramFileBase}/${normalizeLocalFilePath(filePath, token)}`;
     const fetched = await fetchRemoteMedia({
       url,
       fetchImpl,
@@ -460,7 +461,7 @@ export async function resolveMedia(
           logVerbose("telegram: getFile returned no file_path for sticker");
           return null;
         }
-        const url = `${telegramFileBase}/${file.file_path}`;
+        const url = `${telegramFileBase}/${normalizeLocalFilePath(file.file_path, token)}`;
         const fetched = await fetchRemoteMedia({
           url,
           fetchImpl,
@@ -772,7 +773,7 @@ async function downloadStickerThumbnail(
       logVerbose("telegram: getFile for thumbnail returned no file_path");
       return null;
     }
-    const url = `${apiBase}/file/bot${token}/${filePath}`;
+    const url = `${apiBase}/file/bot${token}/${normalizeLocalFilePath(filePath, token)}`;
     const fetched = await fetchRemoteMedia({ url, fetchImpl, filePathHint: filePath });
     const originalName = fetched.fileName ?? filePath;
     return await saveMediaBuffer(

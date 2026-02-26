@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { getTelegramApiBase, normalizeLocalFilePath } from "./api-base.js";
 import { cacheSticker, describeStickerImage, getCachedSticker } from "./sticker-cache.js";
 
 /**
@@ -31,6 +32,8 @@ export interface ResolveCustomEmojiParams {
   fetchImpl?: typeof fetch;
   /** Explicit vision model override from config (provider/model). */
   visionModel?: string;
+  /** Telegram Bot API root URL (local server). Defaults to api.telegram.org. */
+  apiRoot?: string;
 }
 
 /**
@@ -42,7 +45,8 @@ export interface ResolveCustomEmojiParams {
 export async function resolveCustomEmojiAnnotations(
   params: ResolveCustomEmojiParams,
 ): Promise<{ annotatedText: string; annotations: CustomEmojiAnnotation[] }> {
-  const { text, entities, bot, token, cfg, agentDir, agentId, fetchImpl, visionModel } = params;
+  const { text, entities, bot, token, cfg, agentDir, agentId, fetchImpl, visionModel, apiRoot } =
+    params;
 
   // Filter custom_emoji entities
   const customEmojiEntities = entities.filter(
@@ -91,6 +95,7 @@ export async function resolveCustomEmojiAnnotations(
               agentId,
               fetchImpl: resolvedFetch,
               visionModel,
+              apiRoot,
             });
             if (desc) {
               descriptions.set(emojiId, desc);
@@ -147,15 +152,17 @@ async function describeCustomEmojiSticker(params: {
   agentId?: string;
   fetchImpl: typeof fetch;
   visionModel?: string;
+  apiRoot?: string;
 }): Promise<string | null> {
-  const { sticker, token, cfg, agentDir, agentId, fetchImpl, visionModel } = params;
+  const { sticker, token, cfg, agentDir, agentId, fetchImpl, visionModel, apiRoot } = params;
   const thumb = sticker.thumbnail;
   if (!thumb?.file_id) {
     return null;
   }
 
   try {
-    const getFileUrl = `https://api.telegram.org/bot${token}/getFile?file_id=${thumb.file_id}`;
+    const apiBase = getTelegramApiBase(apiRoot);
+    const getFileUrl = `${apiBase}/bot${token}/getFile?file_id=${thumb.file_id}`;
     const res = await fetchImpl(getFileUrl);
     if (!res.ok) {
       return null;
@@ -165,7 +172,7 @@ async function describeCustomEmojiSticker(params: {
     if (!filePath) {
       return null;
     }
-    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const url = `${apiBase}/file/bot${token}/${normalizeLocalFilePath(filePath, token)}`;
     const fetched = await fetchRemoteMedia({ url, fetchImpl, filePathHint: filePath });
     const saved = await saveMediaBuffer(
       fetched.buffer,

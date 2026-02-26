@@ -348,6 +348,7 @@ export const dispatchTelegramMessage = async ({
             agentId: route.agentId,
             limit: telegramCfg.stickerSetIndexLimit ?? 20,
             visionModel: telegramCfg.stickerVisionModel,
+            apiRoot: telegramCfg.apiRoot,
           }).catch((err) =>
             logVerbose(`telegram: set indexing failed for "${sticker.setName}": ${String(err)}`),
           );
@@ -374,6 +375,7 @@ export const dispatchTelegramMessage = async ({
           agentDir,
           agentId: route.agentId,
           visionModel: telegramCfg.stickerVisionModel,
+          apiRoot: telegramCfg.apiRoot,
         });
         if (annotatedText !== ctxPayload.Body) {
           ctxPayload.Body = annotatedText;
