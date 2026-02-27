@@ -55,8 +55,14 @@ const { registerUnhandledRejectionHandlerMock, emitUnhandledRejection, resetUnha
     };
   });
 
-const { createTelegramBotErrors } = vi.hoisted(() => ({
+const { createTelegramBotErrors, createBotSpy } = vi.hoisted(() => ({
   createTelegramBotErrors: [] as unknown[],
+  createBotSpy: vi.fn(),
+}));
+
+const { readUpdateOffset, writeUpdateOffset } = vi.hoisted(() => ({
+  readUpdateOffset: vi.fn().mockResolvedValue(null as number | null),
+  writeUpdateOffset: vi.fn().mockResolvedValue(undefined),
 }));
 
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
@@ -105,8 +111,15 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./update-offset-store.js", () => ({
+  readTelegramUpdateOffset: readUpdateOffset,
+  writeTelegramUpdateOffset: writeUpdateOffset,
+  deleteTelegramUpdateOffset: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("./bot.js", () => ({
-  createTelegramBot: () => {
+  createTelegramBot: (...args: unknown[]) => {
+    createBotSpy(...args);
     const nextError = createTelegramBotErrors.shift();
     if (nextError) {
       throw nextError;
@@ -179,6 +192,9 @@ describe("monitorTelegramProvider (grammY)", () => {
     registerUnhandledRejectionHandlerMock.mockClear();
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
+    createBotSpy.mockClear();
+    readUpdateOffset.mockResolvedValue(null);
+    writeUpdateOffset.mockResolvedValue(undefined);
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -496,5 +512,85 @@ describe("monitorTelegramProvider (grammY)", () => {
       }),
     );
     expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  describe("Bot API server reset detection (stale offset auto-heal)", () => {
+    it("resets offset to null when server update_id is below stored value", async () => {
+      readUpdateOffset.mockResolvedValue(1_000_000);
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ ok: true, result: [{ update_id: 500 }] }),
+      });
+
+      await monitorWithAutoAbort({ token: "1:tok", proxyFetch: mockFetch });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("getUpdates?limit=1&timeout=0"),
+      );
+      expect(createBotSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updateOffset: expect.objectContaining({ lastUpdateId: null }),
+        }),
+      );
+    });
+
+    it("keeps stored offset when server update_id is above stored value", async () => {
+      readUpdateOffset.mockResolvedValue(500);
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ ok: true, result: [{ update_id: 600 }] }),
+      });
+
+      await monitorWithAutoAbort({ token: "1:tok", proxyFetch: mockFetch });
+
+      expect(createBotSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updateOffset: expect.objectContaining({ lastUpdateId: 500 }),
+        }),
+      );
+    });
+
+    it("keeps stored offset when probe returns no pending updates", async () => {
+      readUpdateOffset.mockResolvedValue(1_000_000);
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ ok: true, result: [] }),
+      });
+
+      await monitorWithAutoAbort({ token: "1:tok", proxyFetch: mockFetch });
+
+      expect(createBotSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updateOffset: expect.objectContaining({ lastUpdateId: 1_000_000 }),
+        }),
+      );
+    });
+
+    it("skips probe entirely when stored offset is null", async () => {
+      readUpdateOffset.mockResolvedValue(null);
+      const mockFetch = vi.fn();
+
+      await monitorWithAutoAbort({ token: "1:tok", proxyFetch: mockFetch });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(createBotSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updateOffset: expect.objectContaining({ lastUpdateId: null }),
+        }),
+      );
+    });
+
+    it("keeps stored offset when probe throws a network error (fail-safe)", async () => {
+      readUpdateOffset.mockResolvedValue(1_000_000);
+      const mockFetch = vi.fn().mockRejectedValue(new TypeError("Network error"));
+
+      await monitorWithAutoAbort({ token: "1:tok", proxyFetch: mockFetch });
+
+      expect(createBotSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updateOffset: expect.objectContaining({ lastUpdateId: 1_000_000 }),
+        }),
+      );
+    });
   });
 });
