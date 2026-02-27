@@ -4,7 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { getTelegramApiBase } from "../api-base.js";
+import { getTelegramApiBase, normalizeLocalFilePath } from "../api-base.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
@@ -125,9 +125,10 @@ async function downloadAndSaveTelegramFile(params: {
   apiRoot?: string;
 }) {
   const base = getTelegramApiBase(params.apiRoot);
-  // Strip leading slash so absolute paths from local Bot API server (e.g.
-  // /var/lib/telegram-bot-api/.../voice/file.oga) produce a valid HTTP URL.
-  const url = `${base}/file/bot${params.token}/${params.filePath.replace(/^\/+/, "")}`;
+  // Normalize absolute paths from local Bot API server (e.g.
+  // /var/lib/telegram-bot-api/<token>/voice/file.oga → voice/file.oga)
+  // so the download URL is valid. Cloud relative paths pass through unchanged.
+  const url = `${base}/file/bot${params.token}/${normalizeLocalFilePath(params.filePath, params.token)}`;
   const fetched = await fetchRemoteMedia({
     url,
     fetchImpl: params.fetchImpl,
