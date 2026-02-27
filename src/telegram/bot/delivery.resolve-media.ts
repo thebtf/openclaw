@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { getTelegramApiBase } from "../api-base.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
@@ -100,20 +101,37 @@ function resolveRequiredFetchImpl(proxyFetch?: typeof fetch): typeof fetch {
   return fetchImpl;
 }
 
+/** Build SSRF policy that includes a custom API hostname when apiRoot is set. */
+function resolveSsrfPolicy(apiRoot?: string) {
+  const trimmed = apiRoot?.trim();
+  if (!trimmed) {
+    return TELEGRAM_MEDIA_SSRF_POLICY;
+  }
+  return {
+    ...TELEGRAM_MEDIA_SSRF_POLICY,
+    allowedHostnames: [
+      ...TELEGRAM_MEDIA_SSRF_POLICY.allowedHostnames,
+      new URL(getTelegramApiBase(apiRoot)).hostname,
+    ],
+  };
+}
+
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
   token: string;
   fetchImpl: typeof fetch;
   maxBytes: number;
   telegramFileName?: string;
+  apiRoot?: string;
 }) {
-  const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
+  const base = getTelegramApiBase(params.apiRoot);
+  const url = `${base}/file/bot${params.token}/${params.filePath}`;
   const fetched = await fetchRemoteMedia({
     url,
     fetchImpl: params.fetchImpl,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
-    ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+    ssrfPolicy: resolveSsrfPolicy(params.apiRoot),
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(
@@ -131,6 +149,7 @@ async function resolveStickerMedia(params: {
   maxBytes: number;
   token: string;
   proxyFetch?: typeof fetch;
+  apiRoot?: string;
 }): Promise<
   | {
       path: string;
@@ -141,7 +160,7 @@ async function resolveStickerMedia(params: {
   | null
   | undefined
 > {
-  const { msg, ctx, maxBytes, token, proxyFetch } = params;
+  const { msg, ctx, maxBytes, token, proxyFetch, apiRoot } = params;
   if (!msg.sticker) {
     return undefined;
   }
@@ -171,6 +190,7 @@ async function resolveStickerMedia(params: {
       token,
       fetchImpl,
       maxBytes,
+      apiRoot,
     });
 
     // Check sticker cache for existing description
@@ -226,6 +246,7 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   proxyFetch?: typeof fetch,
+  apiRoot?: string,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -239,6 +260,7 @@ export async function resolveMedia(
     maxBytes,
     token,
     proxyFetch,
+    apiRoot,
   });
   if (stickerResolved !== undefined) {
     return stickerResolved;
@@ -262,6 +284,7 @@ export async function resolveMedia(
     fetchImpl: resolveRequiredFetchImpl(proxyFetch),
     maxBytes,
     telegramFileName: resolveTelegramFileName(msg),
+    apiRoot,
   });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
