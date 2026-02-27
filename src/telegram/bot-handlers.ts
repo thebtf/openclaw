@@ -454,7 +454,7 @@ export const registerTelegramHandlers = ({
         opts.token,
         opts.proxyFetch,
       );
-      if (!media) {
+      if (!media || !media.path) {
         return [];
       }
       return [
