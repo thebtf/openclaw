@@ -250,6 +250,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       return { cancel: true };
     }
+
+    // Guard: cancel compaction if messagesToSummarize contains tool_calls without
+    // matching tool_results. Compacting an in-flight tool_call removes it from
+    // history; when the real tool_result arrives the model sees it without a
+    // matching tool_call -> provider 400 "No tool call found for function call output".
+    if (hasUnresolvedToolCalls(preparation.messagesToSummarize)) {
+      log.warn(
+        "Compaction safeguard: unresolved tool call(s) in messagesToSummarize; " +
+          "cancelling compaction to preserve tool_call/tool_result pairing.",
+      );
+      return { cancel: true };
+    }
+
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
