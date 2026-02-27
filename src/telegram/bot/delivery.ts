@@ -12,6 +12,7 @@ import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
+import { getTelegramApiBase } from "../api-base.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
@@ -313,6 +314,7 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   proxyFetch?: typeof fetch,
+  apiRoot?: string,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -320,16 +322,30 @@ export async function resolveMedia(
   stickerMetadata?: StickerMetadata;
 } | null> {
   const msg = ctx.message;
-  const downloadAndSaveTelegramFile = async (filePath: string, fetchImpl: typeof fetch) => {
-    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+  const telegramFileBase = `${getTelegramApiBase(apiRoot)}/file/bot${token}`;
+  const ssrfPolicy = apiRoot?.trim()
+    ? {
+        ...TELEGRAM_MEDIA_SSRF_POLICY,
+        allowedHostnames: [
+          ...TELEGRAM_MEDIA_SSRF_POLICY.allowedHostnames,
+          new URL(getTelegramApiBase(apiRoot)).hostname,
+        ],
+      }
+    : TELEGRAM_MEDIA_SSRF_POLICY;
+  const downloadAndSaveTelegramFile = async (
+    filePath: string,
+    fetchImpl: typeof fetch,
+    overrideName?: string,
+  ) => {
+    const url = `${telegramFileBase}/${filePath}`;
     const fetched = await fetchRemoteMedia({
       url,
       fetchImpl,
       filePathHint: filePath,
       maxBytes,
-      ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+      ssrfPolicy,
     });
-    const originalName = fetched.fileName ?? filePath;
+    const originalName = overrideName ?? fetched.fileName ?? filePath;
     return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
   };
 
