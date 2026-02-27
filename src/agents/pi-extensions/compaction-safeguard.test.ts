@@ -554,6 +554,37 @@ describe("compaction-safeguard unresolved tool_call guard", () => {
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
 
+  it("cancels compaction when there are no real messages to summarize", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const getApiKeyMock = vi.fn().mockResolvedValue("sk-test");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
+    };
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
   it("proceeds with compaction when tool_calls are all resolved", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
@@ -595,6 +626,29 @@ describe("compaction-safeguard unresolved tool_call guard", () => {
     await compactionHandler(eventWithResolvedTools, mockContext);
 
     // getApiKey should be called — guard did not cancel early
+    expect(getApiKeyMock).toHaveBeenCalled();
+  });
+
+  it("continues when messages include real conversation content", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockEvent = createCompactionEvent({
+      messageText: "real message",
+      tokensBefore: 1500,
+    });
+    const getApiKeyMock = vi.fn().mockResolvedValue(null);
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
+    };
+    expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
   });
 });
