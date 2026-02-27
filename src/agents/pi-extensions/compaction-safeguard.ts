@@ -17,6 +17,7 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -69,6 +70,41 @@ function formatToolFailureMeta(details: unknown): string | undefined {
 
 function extractToolResultText(content: unknown): string {
   return collectTextContentBlocks(content).join("\n");
+}
+
+/**
+ * Returns true if any assistant message in the list has a tool_call
+ * with no matching tool_result in the same list.
+ *
+ * Used to guard against compacting in-flight tool_calls: if the assistant
+ * message that contains a tool_call is summarized away, the subsequent
+ * tool_result will have no matching call in history -> provider 400.
+ */
+export function hasUnresolvedToolCalls(messages: AgentMessage[]): boolean {
+  const resolvedIds = new Set<string>();
+  for (const msg of messages) {
+    if ((msg as { role?: string }).role !== "toolResult") {
+      continue;
+    }
+    const id = extractToolResultId(msg as Extract<AgentMessage, { role: "toolResult" }>);
+    if (id) {
+      resolvedIds.add(id);
+    }
+  }
+  for (const msg of messages) {
+    if ((msg as { role?: string }).role !== "assistant") {
+      continue;
+    }
+    const calls = extractToolCallsFromAssistant(
+      msg as Extract<AgentMessage, { role: "assistant" }>,
+    );
+    for (const call of calls) {
+      if (!resolvedIds.has(call.id)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
@@ -201,6 +237,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       return { cancel: true };
     }
+
+    // Guard: cancel compaction if messagesToSummarize contains tool_calls without
+    // matching tool_results. Compacting an in-flight tool_call removes it from
+    // history; when the real tool_result arrives the model sees it without a
+    // matching tool_call -> provider 400 "No tool call found for function call output".
+    if (hasUnresolvedToolCalls(preparation.messagesToSummarize)) {
+      log.warn(
+        "Compaction safeguard: unresolved tool call(s) in messagesToSummarize; " +
+          "cancelling compaction to preserve tool_call/tool_result pairing.",
+      );
+      return { cancel: true };
+    }
+
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
@@ -392,6 +441,7 @@ export const __testing = {
   formatToolFailuresSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  hasUnresolvedToolCalls,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
