@@ -141,6 +141,39 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       accountId: account.accountId,
       botToken: token,
     });
+
+    // Detect Bot API server reset: if the stored offset is higher than any
+    // update currently in the server's queue, the local Bot API server was
+    // restarted and its update ID counter reset.  Each getUpdates call with the
+    // stale offset silently acknowledges all incoming messages without delivering
+    // them, making bots appear to "read" messages but never respond.
+    //
+    // Safe probe: getUpdates without an offset does NOT acknowledge updates.
+    if (lastUpdateId !== null && lastUpdateId > 0) {
+      const probeUrl = `https://api.telegram.org/bot${token}/getUpdates?limit=1&timeout=0`;
+      try {
+        const probeFetch = proxyFetch ?? fetch;
+        const response = await probeFetch(probeUrl);
+        if (response.ok) {
+          const data = (await response.json()) as {
+            ok?: boolean;
+            result?: Array<{ update_id: number }>;
+          };
+          const pending = data?.ok ? (data.result ?? []) : [];
+          if (pending.length > 0 && pending[0].update_id < lastUpdateId) {
+            (opts.runtime?.error ?? console.error)(
+              `[telegram:${account.accountId}] Bot API server reset detected: ` +
+                `stored offset ${lastUpdateId}, server head ${pending[0].update_id}. ` +
+                `Resetting update offset to recover message delivery.`,
+            );
+            lastUpdateId = null;
+          }
+        }
+      } catch {
+        // Probe failed (network, auth, etc.) — proceed with stored offset.
+      }
+    }
+
     const persistUpdateId = async (updateId: number) => {
       if (lastUpdateId !== null && updateId <= lastUpdateId) {
         return;
