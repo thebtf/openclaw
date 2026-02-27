@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { handleStopCommand } from "./commands-session.js";
 
 // Mock dependencies
 vi.mock("../../agents/bash-process-registry.js", () => ({
@@ -25,21 +25,20 @@ vi.mock("./abort.js", () => ({
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
   formatAbortReplyText: vi.fn(() => "⚙️ Agent was aborted."),
   setAbortMemory: vi.fn(),
-  isAbortTrigger: vi.fn(() => true),
-  resolveSessionEntryForKey: vi.fn(
-    (store: Record<string, unknown> | undefined, key: string | undefined) => {
-      if (!store || !key) {
-        return {};
-      }
-      const direct = store[key];
-      return direct ? { entry: direct, key } : {};
-    },
-  ),
 }));
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: vi.fn(),
   triggerInternalHook: vi.fn(),
+}));
+
+vi.mock("./commands-session-store.js", () => ({
+  persistAbortTargetEntry: vi.fn(() => Promise.resolve(true)),
+}));
+
+vi.mock("./abort-cutoff.js", () => ({
+  resolveAbortCutoffFromContext: vi.fn(),
+  shouldPersistAbortCutoff: vi.fn(() => false),
 }));
 
 describe("handleStopCommand with process killing", () => {
