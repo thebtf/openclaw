@@ -25,6 +25,16 @@ vi.mock("./abort.js", () => ({
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
   formatAbortReplyText: vi.fn(() => "⚙️ Agent was aborted."),
   setAbortMemory: vi.fn(),
+  isAbortTrigger: vi.fn(() => true),
+  resolveSessionEntryForKey: vi.fn(
+    (store: Record<string, unknown> | undefined, key: string | undefined) => {
+      if (!store || !key) {
+        return {};
+      }
+      const direct = store[key];
+      return direct ? { entry: direct, key } : {};
+    },
+  ),
 }));
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
