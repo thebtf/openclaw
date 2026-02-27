@@ -522,7 +522,7 @@ describe("monitorTelegramProvider (grammY)", () => {
         json: async () => ({ ok: true, result: [{ update_id: 500 }] }),
       });
 
-      await monitorTelegramProvider({ token: "1:tok", proxyFetch: mockFetch });
+      await monitorWithAutoAbort({ token: "1:tok", proxyFetch: mockFetch });
 
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining("getUpdates?limit=1&timeout=0"),
@@ -541,7 +541,7 @@ describe("monitorTelegramProvider (grammY)", () => {
         json: async () => ({ ok: true, result: [{ update_id: 600 }] }),
       });
 
-      await monitorTelegramProvider({ token: "1:tok", proxyFetch: mockFetch });
+      await monitorWithAutoAbort({ token: "1:tok", proxyFetch: mockFetch });
 
       expect(createBotSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -557,7 +557,7 @@ describe("monitorTelegramProvider (grammY)", () => {
         json: async () => ({ ok: true, result: [] }),
       });
 
-      await monitorTelegramProvider({ token: "1:tok", proxyFetch: mockFetch });
+      await monitorWithAutoAbort({ token: "1:tok", proxyFetch: mockFetch });
 
       expect(createBotSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -570,7 +570,7 @@ describe("monitorTelegramProvider (grammY)", () => {
       readUpdateOffset.mockResolvedValue(null);
       const mockFetch = vi.fn();
 
-      await monitorTelegramProvider({ token: "1:tok", proxyFetch: mockFetch });
+      await monitorWithAutoAbort({ token: "1:tok", proxyFetch: mockFetch });
 
       expect(mockFetch).not.toHaveBeenCalled();
       expect(createBotSpy).toHaveBeenCalledWith(
@@ -584,7 +584,7 @@ describe("monitorTelegramProvider (grammY)", () => {
       readUpdateOffset.mockResolvedValue(1_000_000);
       const mockFetch = vi.fn().mockRejectedValue(new TypeError("Network error"));
 
-      await monitorTelegramProvider({ token: "1:tok", proxyFetch: mockFetch });
+      await monitorWithAutoAbort({ token: "1:tok", proxyFetch: mockFetch });
 
       expect(createBotSpy).toHaveBeenCalledWith(
         expect.objectContaining({
