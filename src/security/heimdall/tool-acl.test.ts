@@ -308,6 +308,48 @@ describe("tool name normalization", () => {
 });
 
 // ---------------------------------------------------------------------------
+// MCP tools — allowed by default for all tiers
+// ---------------------------------------------------------------------------
+
+describe("MCP tools default allow", () => {
+  it("allows non-dangerous MCP tools for all tiers", () => {
+    const mcpTools = [
+      "mcp__redmine__redmine_list_issues",
+      "mcp__redmine__redmine_create_issue",
+      "mcp__google-docs__readgoogledoc",
+      "mcp__google-docs__writespreadsheet",
+      "mcp__nia__search",
+    ];
+    for (const tool of mcpTools) {
+      expect(isToolAllowed(tool, SenderTier.SYSTEM, noACL)).toBe(true);
+      expect(isToolAllowed(tool, SenderTier.MEMBER, noACL)).toBe(true);
+      expect(isToolAllowed(tool, SenderTier.GUEST, deny)).toBe(true);
+      expect(isToolAllowed(tool, SenderTier.GUEST, readOnly)).toBe(true);
+    }
+  });
+
+  it("still denies dangerous MCP patterns for non-OWNER", () => {
+    expect(isToolAllowed("mcp__server__execute_command", SenderTier.MEMBER, noACL)).toBe(false);
+    expect(isToolAllowed("mcp__fs__write_file", SenderTier.MEMBER, noACL)).toBe(false);
+    expect(isToolAllowed("mcp__db__delete_record", SenderTier.MEMBER, noACL)).toBe(false);
+    expect(isToolAllowed("mcp__server__execute_command", SenderTier.GUEST, readOnly)).toBe(false);
+  });
+
+  it("custom ACL can deny specific MCP tools", () => {
+    const config = {
+      ...deny,
+      toolACL: [{ pattern: "mcp__redmine__*", allowedTiers: [SenderTier.OWNER] }],
+    };
+    // Custom ACL restricts redmine to OWNER only
+    expect(isToolAllowed("mcp__redmine__redmine_list_issues", SenderTier.MEMBER, config)).toBe(
+      false,
+    );
+    // Other MCP tools still allowed by default
+    expect(isToolAllowed("mcp__nia__search", SenderTier.MEMBER, config)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SYSTEM tier — trusted internal runtime calls
 // ---------------------------------------------------------------------------
 

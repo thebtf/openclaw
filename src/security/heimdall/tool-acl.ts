@@ -6,12 +6,15 @@
  *   1. OWNER bypass (always allowed, cannot be restricted by config)
  *   2. Normalize tool name via normalizeToolName
  *   3. Custom toolACL entries (glob-matched, first match wins)
- *   4. Default rules: dangerous patterns → deny; safe lists → allow; else deny
- *      (SYSTEM tier uses MEMBER safe list as conservative baseline)
+ *   4. Default rules:
+ *      a. Dangerous patterns → deny
+ *      b. MCP tools (mcp__*) → allow (operator curates servers; agent deny list handles restrictions)
+ *      c. Built-in safe lists → allow per tier
+ *      d. Otherwise → deny
  */
 
-import type { HeimdallConfig, SenderTier } from "./types.js";
 import { normalizeToolName } from "../../agents/tool-policy.js";
+import type { HeimdallConfig, SenderTier } from "./types.js";
 import { SenderTier as SenderTierEnum } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -134,24 +137,10 @@ function isDangerous(toolName: string): boolean {
  * 3. Custom `toolACL` — first matching glob wins; allow if tier is listed.
  * 4. Defaults:
  *    a. Matches a dangerous pattern → deny.
- *    b. SYSTEM + tool in MEMBER safe list → allow (conservative baseline).
- *       - SYSTEM tier uses same baseline as MEMBER (read-only tools)
- *       - Rationale: internal operations (cron, CLI) need minimal privileges
- *       - To extend: add custom toolACL entry with "system" in allowedTiers
- *    c. MEMBER + tool in MEMBER safe list → allow.
+ *    b. MCP tools (`mcp__*`) → allow for all tiers (operator curates servers).
+ *    c. SYSTEM/MEMBER + tool in safe list → allow.
  *    d. GUEST + "read-only" policy + tool in read-only list → allow.
  *    e. Otherwise → deny.
- *
- * @example Extend SYSTEM tier baseline
- * ```typescript
- * // In heimdall config:
- * toolACL: [
- *   {
- *     pattern: "message",  // Allow notifications
- *     allowedTiers: ["system", "member", "owner"],
- *   },
- * ]
- * ```
  */
 export function isToolAllowed(
   toolName: string,
@@ -180,17 +169,26 @@ export function isToolAllowed(
     return false;
   }
 
-  // 4b. SYSTEM tier — conservative baseline (same as MEMBER safe list)
+  // 4b. MCP tools allowed by default for all tiers.
+  // Rationale: the operator curates which MCP servers are connected;
+  // per-agent restrictions use tools.deny in agent config.
+  // Dangerous MCP patterns (execute_*, write_*, delete_*) are already
+  // caught by step 4a above.
+  if (normalized.startsWith("mcp__")) {
+    return true;
+  }
+
+  // 4c. SYSTEM tier — conservative baseline (same as MEMBER safe list)
   if (senderTier === SenderTierEnum.SYSTEM && DEFAULT_MEMBER_SAFE.has(normalized)) {
     return true;
   }
 
-  // 4c. MEMBER safe list
+  // 4d. MEMBER safe list
   if (senderTier === SenderTierEnum.MEMBER && DEFAULT_MEMBER_SAFE.has(normalized)) {
     return true;
   }
 
-  // 4d. GUEST read-only policy
+  // 4e. GUEST read-only policy
   if (
     senderTier === SenderTierEnum.GUEST &&
     config.defaultGuestPolicy === "read-only" &&
@@ -199,6 +197,6 @@ export function isToolAllowed(
     return true;
   }
 
-  // 4e. Default deny
+  // 4f. Default deny
   return false;
 }
