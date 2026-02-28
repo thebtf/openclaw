@@ -33,11 +33,11 @@ describe("OWNER bypass", () => {
 });
 
 // ---------------------------------------------------------------------------
-// MEMBER — default safe tools
+// Blocklist model: non-dangerous tools allowed for all non-GUEST-deny tiers
 // ---------------------------------------------------------------------------
 
-describe("MEMBER default safe tools", () => {
-  const safes = [
+describe("blocklist: non-dangerous tools allowed by default", () => {
+  const nonDangerous = [
     "search",
     "read",
     "sessions_list",
@@ -49,38 +49,62 @@ describe("MEMBER default safe tools", () => {
     "web_search",
     "web_fetch",
     "agents_list",
+    "message",
+    "sessions_send",
+    "kg_query",
+    "custom_anything",
   ];
 
-  it.each(safes)("allows MEMBER to use %s", (tool) => {
+  it.each(nonDangerous)("allows MEMBER to use %s", (tool) => {
     expect(isToolAllowed(tool, SenderTier.MEMBER, noACL)).toBe(true);
+  });
+
+  it.each(nonDangerous)("allows SYSTEM to use %s", (tool) => {
+    expect(isToolAllowed(tool, SenderTier.SYSTEM, noACL)).toBe(true);
+  });
+
+  it.each(nonDangerous)("allows GUEST (read-only) to use %s", (tool) => {
+    expect(isToolAllowed(tool, SenderTier.GUEST, readOnly)).toBe(true);
   });
 });
 
 // ---------------------------------------------------------------------------
-// MEMBER — dangerous tools denied
+// Dangerous tools denied for non-OWNER
 // ---------------------------------------------------------------------------
 
-describe("MEMBER denied dangerous tools", () => {
+describe("dangerous tools denied for non-OWNER", () => {
   const dangerous = ["exec", "process", "write", "edit", "apply_patch"];
 
   it.each(dangerous)("denies MEMBER from using %s", (tool) => {
     expect(isToolAllowed(tool, SenderTier.MEMBER, noACL)).toBe(false);
   });
 
-  it("denies MEMBER from sandboxed variants", () => {
-    expect(isToolAllowed("sandboxed_write", SenderTier.MEMBER, noACL)).toBe(false);
-    expect(isToolAllowed("sandboxed_edit", SenderTier.MEMBER, noACL)).toBe(false);
+  it.each(dangerous)("denies SYSTEM from using %s", (tool) => {
+    expect(isToolAllowed(tool, SenderTier.SYSTEM, noACL)).toBe(false);
   });
 
-  it("denies MEMBER from MCP dangerous patterns", () => {
+  it.each(dangerous)("denies GUEST (read-only) from using %s", (tool) => {
+    expect(isToolAllowed(tool, SenderTier.GUEST, readOnly)).toBe(false);
+  });
+
+  it("denies sandboxed variants for non-OWNER", () => {
+    expect(isToolAllowed("sandboxed_write", SenderTier.MEMBER, noACL)).toBe(false);
+    expect(isToolAllowed("sandboxed_edit", SenderTier.MEMBER, noACL)).toBe(false);
+    expect(isToolAllowed("sandboxed_write", SenderTier.SYSTEM, noACL)).toBe(false);
+    expect(isToolAllowed("sandboxed_edit", SenderTier.SYSTEM, noACL)).toBe(false);
+  });
+
+  it("denies MCP dangerous patterns for non-OWNER", () => {
     expect(isToolAllowed("mcp__github__execute_command", SenderTier.MEMBER, noACL)).toBe(false);
     expect(isToolAllowed("mcp__server__write_file", SenderTier.MEMBER, noACL)).toBe(false);
     expect(isToolAllowed("mcp__fs__delete_entry", SenderTier.MEMBER, noACL)).toBe(false);
+    expect(isToolAllowed("mcp__server__execute_command", SenderTier.SYSTEM, noACL)).toBe(false);
+    expect(isToolAllowed("mcp__server__execute_command", SenderTier.GUEST, readOnly)).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// GUEST — deny policy
+// GUEST — deny policy blocks everything
 // ---------------------------------------------------------------------------
 
 describe("GUEST with deny policy", () => {
@@ -91,37 +115,43 @@ describe("GUEST with deny policy", () => {
     expect(isToolAllowed("memory_search", SenderTier.GUEST, deny)).toBe(false);
     expect(isToolAllowed("agents_list", SenderTier.GUEST, deny)).toBe(false);
   });
+
+  it("denies MCP tools for GUEST with deny policy", () => {
+    expect(isToolAllowed("mcp__nia__search", SenderTier.GUEST, deny)).toBe(false);
+    expect(isToolAllowed("mcp__redmine__list_issues", SenderTier.GUEST, deny)).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// GUEST — read-only policy
+// GUEST — read-only policy: same as MEMBER (allow non-dangerous)
 // ---------------------------------------------------------------------------
 
 describe("GUEST with read-only policy", () => {
-  const readOnlyTools = [
-    "search",
-    "read",
-    "sessions_list",
-    "sessions_history",
-    "session_status",
-    "image",
-    "memory_search",
-  ];
-
-  it.each(readOnlyTools)("allows GUEST to use %s in read-only mode", (tool) => {
-    expect(isToolAllowed(tool, SenderTier.GUEST, readOnly)).toBe(true);
+  it("allows non-dangerous tools for GUEST in read-only mode", () => {
+    const tools = [
+      "search",
+      "read",
+      "sessions_list",
+      "sessions_history",
+      "session_status",
+      "image",
+      "memory_search",
+      "memory_get",
+      "web_search",
+      "web_fetch",
+      "agents_list",
+      "message",
+      "kg_query",
+    ];
+    tools.forEach((tool) => {
+      expect(isToolAllowed(tool, SenderTier.GUEST, readOnly)).toBe(true);
+    });
   });
 
   it("still denies GUEST from dangerous tools in read-only mode", () => {
     expect(isToolAllowed("exec", SenderTier.GUEST, readOnly)).toBe(false);
     expect(isToolAllowed("write", SenderTier.GUEST, readOnly)).toBe(false);
     expect(isToolAllowed("edit", SenderTier.GUEST, readOnly)).toBe(false);
-  });
-
-  it("denies GUEST from non-read-only safe tools like agents_list", () => {
-    expect(isToolAllowed("agents_list", SenderTier.GUEST, readOnly)).toBe(false);
-    expect(isToolAllowed("memory_get", SenderTier.GUEST, readOnly)).toBe(false);
-    expect(isToolAllowed("web_search", SenderTier.GUEST, readOnly)).toBe(false);
   });
 });
 
@@ -175,9 +205,20 @@ describe("custom ACL overrides", () => {
   it("denies MEMBER when custom ACL does not include their tier", () => {
     const config = {
       ...deny,
-      toolACL: [{ pattern: "exec", allowedTiers: [SenderTier.GUEST] }],
+      toolACL: [{ pattern: "search", allowedTiers: [SenderTier.GUEST] }],
     };
-    expect(isToolAllowed("exec", SenderTier.MEMBER, config)).toBe(false);
+    // Custom ACL explicitly excludes MEMBER for "search"
+    expect(isToolAllowed("search", SenderTier.MEMBER, config)).toBe(false);
+  });
+
+  it("custom ACL can restrict normally-allowed tools", () => {
+    const config = {
+      ...deny,
+      toolACL: [{ pattern: "message", allowedTiers: [SenderTier.OWNER] }],
+    };
+    // "message" is non-dangerous (would be allowed by default), but custom ACL restricts it
+    expect(isToolAllowed("message", SenderTier.MEMBER, config)).toBe(false);
+    expect(isToolAllowed("message", SenderTier.OWNER, config)).toBe(true);
   });
 
   it("custom ACL with glob overrides dangerous defaults", () => {
@@ -205,24 +246,32 @@ describe("custom ACL overrides", () => {
       ...deny,
       toolACL: [{ pattern: "browser_*", allowedTiers: [SenderTier.MEMBER] }],
     };
-    // "search" does not match "browser_*", falls through to default safe list
+    // "search" does not match "browser_*", falls through to default-allow
     expect(isToolAllowed("search", SenderTier.MEMBER, config)).toBe(true);
-    // "exec" does not match "browser_*", falls through to dangerous default
+    // "exec" does not match "browser_*", falls through to dangerous-deny
     expect(isToolAllowed("exec", SenderTier.MEMBER, config)).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Unknown tool → denied for non-OWNER
+// Unknown tools — allowed in blocklist model (default ALLOW)
 // ---------------------------------------------------------------------------
 
-describe("unknown tools", () => {
-  it("denies unknown tool for MEMBER", () => {
-    expect(isToolAllowed("totally_made_up_tool", SenderTier.MEMBER, noACL)).toBe(false);
+describe("unknown tools (blocklist model)", () => {
+  it("allows unknown tool for MEMBER (default-allow)", () => {
+    expect(isToolAllowed("totally_made_up_tool", SenderTier.MEMBER, noACL)).toBe(true);
   });
 
-  it("denies unknown tool for GUEST even in read-only mode", () => {
-    expect(isToolAllowed("totally_made_up_tool", SenderTier.GUEST, readOnly)).toBe(false);
+  it("allows unknown tool for SYSTEM (default-allow)", () => {
+    expect(isToolAllowed("totally_made_up_tool", SenderTier.SYSTEM, noACL)).toBe(true);
+  });
+
+  it("allows unknown tool for GUEST in read-only mode (default-allow)", () => {
+    expect(isToolAllowed("totally_made_up_tool", SenderTier.GUEST, readOnly)).toBe(true);
+  });
+
+  it("denies unknown tool for GUEST with deny policy", () => {
+    expect(isToolAllowed("totally_made_up_tool", SenderTier.GUEST, deny)).toBe(false);
   });
 
   it("allows unknown tool for OWNER", () => {
@@ -244,16 +293,27 @@ describe("edge cases", () => {
 
   it("handles undefined toolACL (falls through to defaults)", () => {
     const config = { ...deny, toolACL: undefined };
+    // MEMBER: non-dangerous allowed, dangerous denied
     expect(isToolAllowed("search", SenderTier.MEMBER, config)).toBe(true);
     expect(isToolAllowed("exec", SenderTier.MEMBER, config)).toBe(false);
   });
 
-  it("handles undefined defaultGuestPolicy (defaults to deny behavior)", () => {
+  it("handles undefined defaultGuestPolicy (fail-safe: deny for GUEST)", () => {
     const config = { defaultGuestPolicy: undefined as unknown as "deny", toolACL: [] };
+    // undefined !== "read-only" → GUEST denied (fail-safe)
     expect(isToolAllowed("search", SenderTier.GUEST, config)).toBe(false);
   });
 
-  it("GUEST can be granted access via custom ACL", () => {
+  it("GUEST can be granted access to dangerous tools via custom ACL", () => {
+    const config = {
+      ...deny,
+      toolACL: [{ pattern: "exec", allowedTiers: [SenderTier.GUEST] }],
+    };
+    // Custom ACL overrides both GUEST-deny and dangerous-deny
+    expect(isToolAllowed("exec", SenderTier.GUEST, config)).toBe(true);
+  });
+
+  it("GUEST can be granted access to non-dangerous tools via custom ACL even with deny policy", () => {
     const config = {
       ...deny,
       toolACL: [{ pattern: "custom_tool", allowedTiers: [SenderTier.GUEST] }],
@@ -282,8 +342,9 @@ describe("tool name normalization", () => {
     expect(isToolAllowed("BASH", SenderTier.MEMBER, noACL)).toBe(false);
   });
 
-  it("handles empty string tool name", () => {
-    expect(isToolAllowed("", SenderTier.MEMBER, noACL)).toBe(false);
+  it("handles empty string tool name (non-dangerous, default-allow)", () => {
+    // Empty string normalizes to empty, not in dangerous list → allowed
+    expect(isToolAllowed("", SenderTier.MEMBER, noACL)).toBe(true);
     expect(isToolAllowed("", SenderTier.OWNER, noACL)).toBe(true);
   });
 
@@ -308,11 +369,11 @@ describe("tool name normalization", () => {
 });
 
 // ---------------------------------------------------------------------------
-// MCP tools — allowed by default for all tiers
+// MCP tools — allowed by default (non-dangerous ones)
 // ---------------------------------------------------------------------------
 
 describe("MCP tools default allow", () => {
-  it("allows non-dangerous MCP tools for all tiers", () => {
+  it("allows non-dangerous MCP tools for SYSTEM and MEMBER", () => {
     const mcpTools = [
       "mcp__redmine__redmine_list_issues",
       "mcp__redmine__redmine_create_issue",
@@ -323,9 +384,13 @@ describe("MCP tools default allow", () => {
     for (const tool of mcpTools) {
       expect(isToolAllowed(tool, SenderTier.SYSTEM, noACL)).toBe(true);
       expect(isToolAllowed(tool, SenderTier.MEMBER, noACL)).toBe(true);
-      expect(isToolAllowed(tool, SenderTier.GUEST, deny)).toBe(true);
       expect(isToolAllowed(tool, SenderTier.GUEST, readOnly)).toBe(true);
     }
+  });
+
+  it("denies all MCP tools for GUEST with deny policy", () => {
+    expect(isToolAllowed("mcp__nia__search", SenderTier.GUEST, deny)).toBe(false);
+    expect(isToolAllowed("mcp__redmine__list_issues", SenderTier.GUEST, deny)).toBe(false);
   });
 
   it("still denies dangerous MCP patterns for non-OWNER", () => {
@@ -354,9 +419,20 @@ describe("MCP tools default allow", () => {
 // ---------------------------------------------------------------------------
 
 describe("SYSTEM tier ACL", () => {
-  it("allows SYSTEM to use MEMBER safe tools (conservative baseline)", () => {
-    const safes = ["search", "read", "sessions_list", "memory_search", "web_search"];
-    safes.forEach((tool) => {
+  it("allows SYSTEM to use any non-dangerous tool (blocklist model)", () => {
+    const tools = [
+      "search",
+      "read",
+      "sessions_list",
+      "memory_search",
+      "web_search",
+      "message",
+      "sessions_send",
+      "kg_query",
+      "domain_resolve",
+      "any_unknown_tool",
+    ];
+    tools.forEach((tool) => {
       expect(isToolAllowed(tool, SenderTier.SYSTEM, noACL)).toBe(true);
     });
   });
@@ -387,17 +463,12 @@ describe("SYSTEM tier ACL", () => {
     expect(isToolAllowed("exec", SenderTier.SYSTEM, config)).toBe(false);
   });
 
-  it("denies SYSTEM tools not in safe list or custom ACL (fail-closed)", () => {
-    expect(isToolAllowed("unknown_tool", SenderTier.SYSTEM, noACL)).toBe(false);
-    expect(isToolAllowed("domain_resolve", SenderTier.SYSTEM, noACL)).toBe(false); // not in DEFAULT_MEMBER_SAFE
-  });
-
-  it("SYSTEM tier can be granted via custom ACL (explicit allow)", () => {
+  it("SYSTEM tier can be granted dangerous tools via custom ACL", () => {
     const config = {
       ...deny,
-      toolACL: [{ pattern: "session_heartbeat", allowedTiers: [SenderTier.SYSTEM] }],
+      toolACL: [{ pattern: "exec", allowedTiers: [SenderTier.SYSTEM] }],
     };
-    expect(isToolAllowed("session_heartbeat", SenderTier.SYSTEM, config)).toBe(true);
-    expect(isToolAllowed("session_heartbeat", SenderTier.MEMBER, config)).toBe(false);
+    expect(isToolAllowed("exec", SenderTier.SYSTEM, config)).toBe(true);
+    expect(isToolAllowed("exec", SenderTier.MEMBER, config)).toBe(false);
   });
 });

@@ -1,16 +1,21 @@
 /**
  * Heimdall Security Layer — Tool ACL
  *
- * Determines whether a given tool is allowed for a specific sender tier.
+ * Blocklist model: everything is allowed by default, only explicitly
+ * dangerous operations are denied for non-OWNER tiers.
+ *
  * Evaluation order:
  *   1. OWNER bypass (always allowed, cannot be restricted by config)
  *   2. Normalize tool name via normalizeToolName
  *   3. Custom toolACL entries (glob-matched, first match wins)
- *   4. Default rules:
- *      a. Dangerous patterns → deny
- *      b. MCP tools (mcp__*) → allow (operator curates servers; agent deny list handles restrictions)
- *      c. Built-in safe lists → allow per tier
- *      d. Otherwise → deny
+ *   4. GUEST with "deny" policy → deny all
+ *   5. Dangerous patterns → deny for non-OWNER
+ *   6. Default → ALLOW
+ *
+ * Rationale: OpenClaw is a general-purpose agent by design. Heimdall
+ * cannot enumerate all tools that should be allowed. Instead, it acts
+ * as a "dangerous operations officer" — blocking exec, write, edit,
+ * and destructive MCP patterns while allowing everything else.
  */
 
 import { normalizeToolName } from "../../agents/tool-policy.js";
@@ -32,7 +37,7 @@ export function globToRegex(pattern: string): RegExp {
 }
 
 // ---------------------------------------------------------------------------
-// Built-in tool lists
+// Dangerous patterns (blocklist)
 // ---------------------------------------------------------------------------
 
 /** Dangerous tools — only OWNER may invoke these by default. */
@@ -49,61 +54,8 @@ const DEFAULT_DANGEROUS_PATTERNS: string[] = [
   "mcp__*__delete_*",
 ];
 
-/**
- * Tools considered safe for MEMBER tier by default.
- *
- * **SYSTEM tier also uses this list** as conservative baseline (Task 1.3, Phase 1).
- * SYSTEM tier gets read-only tools + audit trail, without OWNER privileges.
- *
- * **Rationale:**
- * - All tools in this list are read-only or low-risk queries
- * - No file writes, no command execution, no destructive operations
- * - Suitable for internal runtime operations (cron, heartbeat, CLI)
- *
- * **To extend for SYSTEM tier**, add custom toolACL entry in config:
- * ```typescript
- * heimdall: {
- *   enabled: true,
- *   toolACL: [
- *     {
- *       pattern: "message",  // Allow notification delivery
- *       allowedTiers: ["system", "member", "owner"],
- *     },
- *     {
- *       pattern: "sessions_send",  // Allow agent-to-agent messaging
- *       allowedTiers: ["system", "member", "owner"],
- *     },
- *   ],
- * }
- * ```
- */
-const DEFAULT_MEMBER_SAFE: Set<string> = new Set([
-  "search",
-  "read",
-  "sessions_list",
-  "sessions_history",
-  "session_status",
-  "image",
-  "memory_search",
-  "memory_get",
-  "web_search",
-  "web_fetch",
-  "agents_list",
-]);
-
-/** Read-only tools available to GUEST when defaultGuestPolicy is "read-only". */
-const GUEST_READ_ONLY: Set<string> = new Set([
-  "search",
-  "read",
-  "sessions_list",
-  "sessions_history",
-  "session_status",
-  "image",
-  "memory_search",
-]);
-
 // ---------------------------------------------------------------------------
-// Pre-compiled regexes for default dangerous patterns
+// Pre-compiled regexes for dangerous patterns
 // ---------------------------------------------------------------------------
 
 const DANGEROUS_REGEXES: RegExp[] = DEFAULT_DANGEROUS_PATTERNS.map(globToRegex);
@@ -131,16 +83,13 @@ function isDangerous(toolName: string): boolean {
 /**
  * Check whether `toolName` is allowed for `senderTier` under the given config.
  *
- * Rules (evaluated in order):
+ * Blocklist model — rules (evaluated in order):
  * 1. OWNER → always `true` (hardcoded bypass, config cannot restrict).
  * 2. Normalize tool name.
  * 3. Custom `toolACL` — first matching glob wins; allow if tier is listed.
- * 4. Defaults:
- *    a. Matches a dangerous pattern → deny.
- *    b. MCP tools (`mcp__*`) → allow for all tiers (operator curates servers).
- *    c. SYSTEM/MEMBER + tool in safe list → allow.
- *    d. GUEST + "read-only" policy + tool in read-only list → allow.
- *    e. Otherwise → deny.
+ * 4. GUEST + "deny" policy → deny all.
+ * 5. Matches a dangerous pattern → deny.
+ * 6. Default → ALLOW.
  */
 export function isToolAllowed(
   toolName: string,
@@ -164,39 +113,17 @@ export function isToolAllowed(
     }
   }
 
-  // 4a. Dangerous patterns → deny non-OWNER
+  // 4. GUEST without explicit "read-only" policy → deny everything.
+  // Fail-safe: undefined/missing policy defaults to deny for GUEST tier.
+  if (senderTier === SenderTierEnum.GUEST && config.defaultGuestPolicy !== "read-only") {
+    return false;
+  }
+
+  // 5. Dangerous patterns → deny for non-OWNER
   if (isDangerous(normalized)) {
     return false;
   }
 
-  // 4b. MCP tools allowed by default for all tiers.
-  // Rationale: the operator curates which MCP servers are connected;
-  // per-agent restrictions use tools.deny in agent config.
-  // Dangerous MCP patterns (execute_*, write_*, delete_*) are already
-  // caught by step 4a above.
-  if (normalized.startsWith("mcp__")) {
-    return true;
-  }
-
-  // 4c. SYSTEM tier — conservative baseline (same as MEMBER safe list)
-  if (senderTier === SenderTierEnum.SYSTEM && DEFAULT_MEMBER_SAFE.has(normalized)) {
-    return true;
-  }
-
-  // 4d. MEMBER safe list
-  if (senderTier === SenderTierEnum.MEMBER && DEFAULT_MEMBER_SAFE.has(normalized)) {
-    return true;
-  }
-
-  // 4e. GUEST read-only policy
-  if (
-    senderTier === SenderTierEnum.GUEST &&
-    config.defaultGuestPolicy === "read-only" &&
-    GUEST_READ_ONLY.has(normalized)
-  ) {
-    return true;
-  }
-
-  // 4f. Default deny
-  return false;
+  // 6. Default → ALLOW
+  return true;
 }
