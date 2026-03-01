@@ -313,6 +313,7 @@ export async function runAgentTurnWithFallback(params: {
               }
               return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
             })(),
+            internal: params.opts?.isHeartbeat === true,
             suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
             images: params.opts?.images,
             abortSignal: params.opts?.abortSignal,
