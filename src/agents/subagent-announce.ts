@@ -790,20 +790,23 @@ async function sendSubagentAnnounceDirectly(params: {
           };
         }
         await runAnnounceDeliveryWithRetry({
-          operation: "completion direct send",
+          operation: "completion direct announce",
           signal: params.signal,
           run: async () =>
             await callGateway({
-              method: "send",
+              method: "agent",
               params: {
+                sessionKey: canonicalRequesterSessionKey,
+                message: params.triggerMessage,
+                deliver: true,
+                bestEffortDeliver: params.bestEffortDeliver,
                 channel: completionChannel,
                 to: completionTo,
                 accountId: completionDirectOrigin?.accountId,
                 threadId: completionThreadId,
-                sessionKey: canonicalRequesterSessionKey,
-                message: params.completionMessage,
                 idempotencyKey: params.directIdempotencyKey,
               },
+              expectFinal: true,
               timeoutMs: announceTimeoutMs,
             }),
         });
