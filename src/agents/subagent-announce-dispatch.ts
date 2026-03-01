@@ -69,22 +69,13 @@ export async function runSubagentAnnounceDispatch(params: {
     });
   }
 
-  if (!params.expectsCompletionMessage) {
-    const primaryQueue = mapQueueOutcomeToDeliveryResult(await params.queue());
-    appendPhase("queue-primary", primaryQueue);
-    if (primaryQueue.delivered) {
-      return withPhases(primaryQueue);
-    }
-
-    const primaryDirect = await params.direct();
-    appendPhase("direct-primary", primaryDirect);
-    return withPhases(primaryDirect);
-  }
-
-  const primaryDirect = await params.direct();
-  appendPhase("direct-primary", primaryDirect);
-  if (primaryDirect.delivered) {
-    return withPhases(primaryDirect);
+  // Always try queue first so the parent session LLM can voice-convert the
+  // result.  Direct announce is a fallback when the queue cannot accept (no
+  // active session, no queue mode configured, etc.).
+  const primaryQueue = mapQueueOutcomeToDeliveryResult(await params.queue());
+  appendPhase("queue-primary", primaryQueue);
+  if (primaryQueue.delivered) {
+    return withPhases(primaryQueue);
   }
 
   if (params.signal?.aborted) {
@@ -94,11 +85,7 @@ export async function runSubagentAnnounceDispatch(params: {
     });
   }
 
-  const fallbackQueue = mapQueueOutcomeToDeliveryResult(await params.queue());
-  appendPhase("queue-fallback", fallbackQueue);
-  if (fallbackQueue.delivered) {
-    return withPhases(fallbackQueue);
-  }
-
+  const primaryDirect = await params.direct();
+  appendPhase("direct-primary", primaryDirect);
   return withPhases(primaryDirect);
 }
