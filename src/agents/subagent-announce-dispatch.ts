@@ -69,13 +69,27 @@ export async function runSubagentAnnounceDispatch(params: {
     });
   }
 
-  // Always try queue first so the parent session LLM can voice-convert the
-  // result.  Direct announce is a fallback when the queue cannot accept (no
-  // active session, no queue mode configured, etc.).
-  const primaryQueue = mapQueueOutcomeToDeliveryResult(await params.queue());
-  appendPhase("queue-primary", primaryQueue);
-  if (primaryQueue.delivered) {
-    return withPhases(primaryQueue);
+  // Non-completion mode: queue first (inject into parent session for LLM processing).
+  if (!params.expectsCompletionMessage) {
+    const primaryQueue = mapQueueOutcomeToDeliveryResult(await params.queue());
+    appendPhase("queue-primary", primaryQueue);
+    if (primaryQueue.delivered) {
+      return withPhases(primaryQueue);
+    }
+
+    const primaryDirect = await params.direct();
+    appendPhase("direct-primary", primaryDirect);
+    return withPhases(primaryDirect);
+  }
+
+  // Completion mode: direct first (separate agent run avoids mixing announce
+  // with user messages in an active run — queue steer would concatenate them).
+  // The direct path uses method: "agent" with triggerMessage for LLM voice
+  // conversion instead of raw send with completionMessage.
+  const primaryDirect = await params.direct();
+  appendPhase("direct-primary", primaryDirect);
+  if (primaryDirect.delivered) {
+    return withPhases(primaryDirect);
   }
 
   if (params.signal?.aborted) {
@@ -85,7 +99,11 @@ export async function runSubagentAnnounceDispatch(params: {
     });
   }
 
-  const primaryDirect = await params.direct();
-  appendPhase("direct-primary", primaryDirect);
+  const fallbackQueue = mapQueueOutcomeToDeliveryResult(await params.queue());
+  appendPhase("queue-fallback", fallbackQueue);
+  if (fallbackQueue.delivered) {
+    return withPhases(fallbackQueue);
+  }
+
   return withPhases(primaryDirect);
 }

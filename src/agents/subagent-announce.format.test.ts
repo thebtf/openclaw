@@ -1114,7 +1114,7 @@ describe("subagent announce formatting", () => {
     expect(new Set(idempotencyKeys).size).toBe(2);
   });
 
-  it("prefers queue-first for completion-mode and falls back to direct when queue unavailable", async () => {
+  it("delivers completion via direct-first agent method when route is available", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
@@ -1138,7 +1138,7 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
-    // Queue succeeds via agent call (collect path), no direct fallback needed.
+    // Direct succeeds via agent call (completion path), no queue fallback needed.
     expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
       method: "agent",
