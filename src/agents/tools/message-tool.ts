@@ -1,4 +1,6 @@
 import { Type } from "@sinclair/typebox";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
 import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
@@ -12,7 +14,6 @@ import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
 } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
@@ -24,7 +25,6 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveGatewayOptions } from "./gateway.js";
 
@@ -612,6 +612,14 @@ function filterActionsForContext(params: {
   return params.actions.filter((action) => !BLUEBUBBLES_GROUP_ACTIONS.has(action));
 }
 
+/** Per-action usage hints appended when specific actions are available. */
+const ACTION_HINTS: Partial<Record<ChannelMessageActionName, string>> = {
+  "sticker-search":
+    'To find a sticker: action="sticker-search", query="<description or emoji>". Returns fileId, emoji, description.',
+  sticker:
+    'To send a sticker: action="sticker", to="<chatId>", fileId="<sticker fileId from cache or sticker-search>".',
+};
+
 function buildMessageToolDescription(options?: {
   config?: OpenClawConfig;
   currentChannel?: string;
@@ -634,6 +642,15 @@ function buildMessageToolDescription(options?: {
       const allActions = new Set(["send", ...channelActions]);
       const actionList = Array.from(allActions).toSorted().join(", ");
       let desc = `${baseDescription} Current channel (${options.currentChannel}) supports: ${actionList}.`;
+
+      // Append per-action usage hints
+      const hints = channelActions
+        .map((a) => ACTION_HINTS[a])
+        .filter(Boolean)
+        .join(" ");
+      if (hints) {
+        desc += ` ${hints}`;
+      }
 
       // Include other configured channels so cron/isolated agents can discover them
       const otherChannels: string[] = [];

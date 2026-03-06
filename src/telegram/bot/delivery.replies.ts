@@ -20,6 +20,7 @@ import {
 } from "../format.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
+import { withTelegramApiErrorLogging } from "../api-logging.js";
 import {
   buildTelegramSendParams,
   sendTelegramText,
@@ -536,7 +537,8 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
-    if (!reply?.text && !hasMedia) {
+    const hasSticker = Boolean(reply?.stickerId);
+    if (!reply?.text && !hasMedia && !hasSticker) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
@@ -583,6 +585,30 @@ export async function deliverReplies(params: {
       const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
       let firstDeliveredMessageId: number | undefined;
+
+      // Handle sticker delivery before text/media
+      if (hasSticker) {
+        const stickerReplyToId = resolveReplyToForSend({
+          replyToId,
+          replyToMode: params.replyToMode,
+          progress,
+        });
+        await withTelegramApiErrorLogging({
+          operation: "sendSticker",
+          runtime: params.runtime,
+          fn: () =>
+            params.bot.api.sendSticker(params.chatId, reply.stickerId!, {
+              ...buildTelegramSendParams({ replyToMessageId: stickerReplyToId, thread: params.thread }),
+            }),
+        });
+        markDelivered(progress);
+        markReplyApplied(progress, stickerReplyToId);
+        // If there's no text or media, we're done with this reply
+        if (!reply.text && !hasMedia) {
+          continue;
+        }
+      }
+
       if (mediaList.length === 0) {
         firstDeliveredMessageId = await deliverTextReply({
           bot: params.bot,
