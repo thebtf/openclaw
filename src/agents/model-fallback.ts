@@ -35,7 +35,7 @@ type ModelCandidate = {
 };
 
 export type ModelFallbackRunOptions = {
-  allowRateLimitCooldownProbe?: boolean;
+  allowTransientCooldownProbe?: boolean;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -429,11 +429,11 @@ function resolveCooldownDecision(params: {
   }
 
   // For primary: try when requested model or when probe allows.
-  // For same-provider fallbacks: only relax cooldown on rate_limit, which
-  // is commonly model-scoped and can recover on a sibling model.
+  // For same-provider fallbacks: only relax cooldown on transient provider
+  // limits, which are often model-scoped and can recover on a sibling model.
   const shouldAttemptDespiteCooldown =
     (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
-    (!params.isPrimary && inferredReason === "rate_limit");
+    (!params.isPrimary && (inferredReason === "rate_limit" || inferredReason === "overloaded"));
   if (!shouldAttemptDespiteCooldown) {
     return {
       type: "skip",
@@ -515,8 +515,8 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           lastProbeAttempt.set(probeThrottleKey, now);
         }
-        if (decision.reason === "rate_limit") {
-          runOptions = { allowRateLimitCooldownProbe: true };
+        if (decision.reason === "rate_limit" || decision.reason === "overloaded") {
+          runOptions = { allowTransientCooldownProbe: true };
         }
       }
 

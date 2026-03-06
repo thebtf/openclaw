@@ -85,6 +85,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { resolveMaxRunTimeoutMs } from "../../timeout.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
@@ -1512,6 +1513,25 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      // --- Idle watchdog + hard cap setup ---
+      // Idle watchdog resets on agent activity (tool start, LLM message start).
+      // Hard cap is an absolute wall-clock limit that never resets.
+      const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
+      const maxRunTimeoutMs = resolveMaxRunTimeoutMs({ cfg: params.config });
+      let abortWarnTimer: NodeJS.Timeout | undefined;
+      let watchdogTimer: NodeJS.Timeout | undefined;
+      let hardCapTimer: NodeJS.Timeout | undefined;
+      let timeoutFired = false;
+      // Forward ref: onRunTimeout needs subscription.isCompacting() which isn't available yet.
+      // Safe: resetWatchdog only schedules a setTimeout(>=60s); by the time it fires,
+      // onRunTimeout is guaranteed to be assigned (JS event loop, synchronous assignment below).
+      let onRunTimeout: ((kind: "idle" | "hard-cap") => void) | undefined;
+
+      const resetWatchdog = () => {
+        clearTimeout(watchdogTimer);
+        watchdogTimer = setTimeout(() => onRunTimeout?.("idle"), Math.max(1, params.timeoutMs));
+      };
+
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -1531,6 +1551,7 @@ export async function runEmbeddedAttempt(
         onPartialReply: params.onPartialReply,
         onAssistantMessageStart: params.onAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
+        onActivity: resetWatchdog,
         enforceFinalTag: params.enforceFinalTag,
         // Abort prompt early on rate limit / failover errors so pi-ai's internal
         // retry doesn't block us for minutes.  Simulates a timeout so the outer
@@ -1567,40 +1588,52 @@ export async function runEmbeddedAttempt(
       };
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
 
-      let abortWarnTimer: NodeJS.Timeout | undefined;
-      const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-      const abortTimer = setTimeout(
-        () => {
-          if (!isProbeSession) {
-            log.warn(
-              `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
-            );
-          }
-          if (
-            shouldFlagCompactionTimeout({
-              isTimeout: true,
-              isCompactionPendingOrRetrying: subscription.isCompacting(),
-              isCompactionInFlight: activeSession.isCompacting,
-            })
-          ) {
-            timedOutDuringCompaction = true;
-          }
-          abortRun(true);
-          if (!abortWarnTimer) {
-            abortWarnTimer = setTimeout(() => {
-              if (!activeSession.isStreaming) {
-                return;
-              }
-              if (!isProbeSession) {
-                log.warn(
-                  `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
-                );
-              }
-            }, 10_000);
-          }
-        },
-        Math.max(1, params.timeoutMs),
-      );
+      // Assign the timeout fire handler now that subscription + activeSession are available.
+      onRunTimeout = (kind) => {
+        // Guard against double-fire (idle + hard-cap both trigger before abort completes).
+        if (timeoutFired) {
+          return;
+        }
+        timeoutFired = true;
+        if (!isProbeSession) {
+          const suffix =
+            kind === "idle"
+              ? `idleTimeoutMs=${params.timeoutMs}`
+              : `maxRunTimeoutMs=${maxRunTimeoutMs ?? 0}`;
+          log.warn(
+            `embedded run timeout (${kind}): runId=${params.runId} sessionId=${params.sessionId} ${suffix}`,
+          );
+        }
+        if (
+          shouldFlagCompactionTimeout({
+            isTimeout: true,
+            isCompactionPendingOrRetrying: subscription.isCompacting(),
+            isCompactionInFlight: activeSession.isCompacting,
+          })
+        ) {
+          timedOutDuringCompaction = true;
+        }
+        abortRun(true);
+        if (!abortWarnTimer) {
+          abortWarnTimer = setTimeout(() => {
+            if (!activeSession.isStreaming) {
+              return;
+            }
+            if (!isProbeSession) {
+              log.warn(
+                `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
+          }, 10_000);
+        }
+      };
+
+      // Start idle watchdog (resets on tool start and LLM message start via onActivity).
+      resetWatchdog();
+      // Start hard cap timer if configured (absolute wall-clock limit, never resets).
+      if (maxRunTimeoutMs) {
+        hardCapTimer = setTimeout(() => onRunTimeout?.("hard-cap"), maxRunTimeoutMs);
+      }
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
@@ -1977,7 +2010,8 @@ export async function runEmbeddedAttempt(
             });
         }
       } finally {
-        clearTimeout(abortTimer);
+        clearTimeout(watchdogTimer);
+        clearTimeout(hardCapTimer);
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);
         }
