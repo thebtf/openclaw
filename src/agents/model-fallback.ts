@@ -534,6 +534,21 @@ export async function runWithModelFallback<T>(params: {
           continue;
         }
       }
+
+      // Proxy provider: check per-model cooldown in addition to profile-level.
+      // For proxy/aggregator providers a rate-limited model does not mean the
+      // entire provider is down — other models remain available.
+      if (params.cfg && isProviderProxy(params.cfg, candidate.provider)) {
+        if (isModelInCooldown(candidate.provider, candidate.model)) {
+          attempts.push({
+            provider: candidate.provider,
+            model: candidate.model,
+            error: `Model ${candidate.model} is in cooldown (proxy model-level rate limit)`,
+            reason: "rate_limit",
+          });
+          continue;
+        }
+      }
     }
 
     const attemptRun = await runFallbackAttempt({

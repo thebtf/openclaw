@@ -5,7 +5,6 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
-import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
@@ -15,7 +14,6 @@ import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   isProfileInCooldown,
-  type AuthProfileFailureReason,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
@@ -54,6 +52,11 @@ import {
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
+import {
+  isModelSpecificReason,
+  isProviderProxy,
+  markModelCooldown,
+} from "../proxy-model-cooldown.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -81,14 +84,6 @@ type CopilotTokenState = {
 const COPILOT_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const COPILOT_REFRESH_RETRY_MS = 60 * 1000;
 const COPILOT_REFRESH_MIN_DELAY_MS = 5 * 1000;
-// Keep overload pacing noticeable enough to avoid tight retry bursts, but short
-// enough that fallback still feels responsive within a single turn.
-const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
-  initialMs: 250,
-  maxMs: 1_500,
-  factor: 2,
-  jitter: 0.2,
-};
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -659,21 +654,21 @@ export async function runEmbeddedPiAgent(
               profileIds: autoProfileCandidates,
             }) ?? "rate_limit")
           : null;
-        const allowTransientCooldownProbe =
-          params.allowTransientCooldownProbe === true &&
+        const allowRateLimitCooldownProbe =
+          params.allowRateLimitCooldownProbe === true &&
           allAutoProfilesInCooldown &&
-          (unavailableReason === "rate_limit" || unavailableReason === "overloaded");
-        let didTransientCooldownProbe = false;
+          unavailableReason === "rate_limit";
+        let didRateLimitCooldownProbe = false;
 
         while (profileIndex < profileCandidates.length) {
           const candidate = profileCandidates[profileIndex];
           const inCooldown =
             candidate && candidate !== lockedProfileId && isProfileInCooldown(authStore, candidate);
           if (inCooldown) {
-            if (allowTransientCooldownProbe && !didTransientCooldownProbe) {
-              didTransientCooldownProbe = true;
+            if (allowRateLimitCooldownProbe && !didRateLimitCooldownProbe) {
+              didRateLimitCooldownProbe = true;
               log.warn(
-                `probing cooldowned auth profile for ${provider}/${modelId} due to ${unavailableReason ?? "transient"} unavailability`,
+                `probing cooldowned auth profile for ${provider}/${modelId} due to rate_limit unavailability`,
               );
             } else {
               profileIndex += 1;
@@ -732,10 +727,9 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
-      let overloadFailoverAttempts = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
-        reason?: AuthProfileFailureReason | null;
+        reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
         config?: RunEmbeddedPiAgentParams["config"];
         agentDir?: RunEmbeddedPiAgentParams["agentDir"];
       }) => {
@@ -750,36 +744,6 @@ export async function runEmbeddedPiAgent(
           cfg: params.config,
           agentDir,
         });
-      };
-      const resolveAuthProfileFailureReason = (
-        failoverReason: FailoverReason | null,
-      ): AuthProfileFailureReason | null => {
-        // Timeouts are transport/model-path failures, not auth health signals,
-        // so they should not persist auth-profile failure state.
-        if (!failoverReason || failoverReason === "timeout") {
-          return null;
-        }
-        return failoverReason;
-      };
-      const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
-        if (reason !== "overloaded") {
-          return;
-        }
-        overloadFailoverAttempts += 1;
-        const delayMs = computeBackoff(OVERLOAD_FAILOVER_BACKOFF_POLICY, overloadFailoverAttempts);
-        log.warn(
-          `overload backoff before failover for ${provider}/${modelId}: attempt=${overloadFailoverAttempts} delayMs=${delayMs}`,
-        );
-        try {
-          await sleepWithAbort(delayMs, params.abortSignal);
-        } catch (err) {
-          if (params.abortSignal?.aborted) {
-            const abortErr = new Error("Operation aborted", { cause: err });
-            abortErr.name = "AbortError";
-            throw abortErr;
-          }
-          throw err;
-        }
       };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
@@ -1206,19 +1170,15 @@ export async function runEmbeddedPiAgent(
               };
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
-            const promptProfileFailureReason =
-              resolveAuthProfileFailureReason(promptFailoverReason);
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
-              reason: promptProfileFailureReason,
+              reason: promptFailoverReason,
             });
-            const promptFailoverFailure = isFailoverErrorMessage(errorText);
             if (
-              promptFailoverFailure &&
+              isFailoverErrorMessage(errorText) &&
               promptFailoverReason !== "timeout" &&
               (await advanceAuthProfile())
             ) {
-              await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
             }
             const fallbackThinking = pickFallbackThinkingLevel({
@@ -1232,11 +1192,9 @@ export async function runEmbeddedPiAgent(
               thinkLevel = fallbackThinking;
               continue;
             }
-            // Throw FailoverError for prompt-side failover reasons when fallbacks
-            // are configured so outer model fallback can continue on overload,
-            // rate-limit, auth, or billing failures.
-            if (fallbackConfigured && promptFailoverFailure) {
-              await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
+            // FIX: Throw FailoverError for prompt errors when fallbacks configured
+            // This enables model fallback for quota/rate limit errors during prompt submission
+            if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
               throw new FailoverError(errorText, {
                 reason: promptFailoverReason ?? "unknown",
                 provider,
@@ -1265,8 +1223,6 @@ export async function runEmbeddedPiAgent(
           const billingFailure = isBillingAssistantError(lastAssistant);
           const failoverFailure = isFailoverAssistantError(lastAssistant);
           const assistantFailoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
-          const assistantProfileFailureReason =
-            resolveAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
 
@@ -1306,14 +1262,25 @@ export async function runEmbeddedPiAgent(
 
           if (shouldRotate) {
             if (lastProfileId) {
-              const reason = timedOut ? "timeout" : assistantProfileFailureReason;
-              // Skip cooldown for timeouts: a timeout is model/network-specific,
-              // not an auth issue. Marking the profile would poison fallback models
-              // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
-              await maybeMarkAuthProfileFailure({
-                profileId: lastProfileId,
-                reason,
-              });
+              const reason =
+                timedOut || assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : (assistantFailoverReason ?? "unknown");
+              if (isProviderProxy(params.config, provider) && isModelSpecificReason(reason)) {
+                // Proxy provider + model-specific failure: mark per-model cooldown only.
+                // The auth profile itself is healthy — other models on this proxy remain available.
+                markModelCooldown(provider, modelId);
+                log.debug(
+                  `Proxy model ${provider}/${modelId} in cooldown (reason: ${reason}). Other models unaffected.`,
+                );
+              } else {
+                // Non-proxy provider or profile-level failure:
+                // maybeMarkAuthProfileFailure already skips timeouts.
+                await maybeMarkAuthProfileFailure({
+                  profileId: lastProfileId,
+                  reason,
+                });
+              }
               if (timedOut && !isProbeSession) {
                 log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
               }
@@ -1326,12 +1293,10 @@ export async function runEmbeddedPiAgent(
 
             const rotated = await advanceAuthProfile();
             if (rotated) {
-              await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;
             }
 
             if (fallbackConfigured) {
-              await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               // Prefer formatted error message (user-friendly) over raw errorMessage
               const message =
                 (lastAssistant
