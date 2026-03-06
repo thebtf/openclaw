@@ -10,7 +10,6 @@ import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
-import { getTelegramApiBase } from "./api-base.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
@@ -151,8 +150,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     //
     // Safe probe: getUpdates without an offset does NOT acknowledge updates.
     if (lastUpdateId !== null && lastUpdateId > 0) {
-      const apiBase = getTelegramApiBase(account.config.apiRoot);
-      const probeUrl = `${apiBase}/bot${token}/getUpdates?limit=1&timeout=0`;
+      const probeUrl = `https://api.telegram.org/bot${token}/getUpdates?limit=1&timeout=0`;
       try {
         const probeFetch = proxyFetch ?? fetch;
         const response = await probeFetch(probeUrl);
