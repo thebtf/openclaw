@@ -554,6 +554,17 @@ export function resolveThinkingDefault(params: {
   ) {
     return perModelThinking;
   }
+  // Check model capability: if the catalog explicitly marks a model as
+  // non-reasoning (reasoning: false), honour that over the global thinkingDefault.
+  // This lets operators register two variants of the same underlying model —
+  // one without thinking (e.g. qwen-3.5-plus) and one with (qwen-3.5-plus-thinking) —
+  // and have the non-thinking variant stay quiet regardless of global defaults.
+  const candidate = params.catalog?.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  if (candidate?.reasoning === false) {
+    return "off";
+  }
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;
@@ -566,9 +577,6 @@ export function resolveThinkingDefault(params: {
   if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
     return "adaptive";
   }
-  const candidate = params.catalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
   if (candidate?.reasoning) {
     return "low";
   }

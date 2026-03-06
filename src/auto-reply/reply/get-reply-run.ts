@@ -386,7 +386,21 @@ export async function runPreparedReply(
   let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
-  if (!resolvedThinkLevel) {
+  if (!resolvedThinkLevel && prefixedCommandBody) {
+    const parts = prefixedCommandBody.split(/\s+/);
+    const maybeLevel = normalizeThinkLevel(parts[0]);
+    if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
+      resolvedThinkLevel = maybeLevel;
+      prefixedCommandBody = parts.slice(1).join(" ").trim();
+    }
+  }
+  // Always pass through the catalog-aware path unless the user explicitly set a
+  // think level via /think directive or a persisted session setting.  When the
+  // level was inherited solely from the global thinkingDefault, the model's
+  // reasoning capability (reasoning: false in catalog) must be respected.
+  const thinkFromExplicitSource =
+    directives.hasThinkDirective || Boolean(sessionEntry?.thinkingLevel);
+  if (!resolvedThinkLevel || !thinkFromExplicitSource) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
   if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
