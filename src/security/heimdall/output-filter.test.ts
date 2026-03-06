@@ -38,9 +38,11 @@ describe("redactOutput", () => {
 
   it("redacts GitHub OAuth tokens (gho_ + 36 chars)", () => {
     const token = "gho_" + "B".repeat(40);
-    const input = `token: ${token}`;
+    // "token: <value>" matches "Generic Secret Assignment" before "GitHub OAuth"
+    // because DEPLOYMENT_PATTERNS are evaluated first.
+    const input = `gho-token ${token}`;
     const result = redactOutput(input);
-    expect(result.redacted).toBe("token: [REDACTED:GitHub OAuth]");
+    expect(result.redacted).toBe("gho-token [REDACTED:GitHub OAuth]");
     expect(result.matches).toEqual([{ pattern: "GitHub OAuth", count: 1 }]);
   });
 
@@ -50,9 +52,11 @@ describe("redactOutput", () => {
 
   it("redacts GitHub App tokens (ghs_ + 36 chars)", () => {
     const token = "ghs_" + "c".repeat(36);
-    const input = `GITHUB_TOKEN=${token}`;
+    // "GITHUB_TOKEN=<value>" matches "Generic Secret Assignment" before "GitHub App"
+    // because DEPLOYMENT_PATTERNS are evaluated first.
+    const input = `ghs-app ${token}`;
     const result = redactOutput(input);
-    expect(result.redacted).toBe("GITHUB_TOKEN=[REDACTED:GitHub App]");
+    expect(result.redacted).toBe("ghs-app [REDACTED:GitHub App]");
     expect(result.matches).toEqual([{ pattern: "GitHub App", count: 1 }]);
   });
 
@@ -88,19 +92,20 @@ describe("redactOutput", () => {
     const ghToken = "ghp_" + "x".repeat(40);
     const awsKey = "AKIAIOSFODNN7EXAMPLE";
 
+    // Use non-triggering prefixes so deployment patterns don't intercept
     const input = [
-      `OPENAI_API_KEY=${openaiKey}`,
-      `GITHUB_TOKEN=${ghToken}`,
-      `AWS_KEY=${awsKey}`,
+      `openai ${openaiKey}`,
+      `github ${ghToken}`,
+      `aws ${awsKey}`,
     ].join("\n");
 
     const result = redactOutput(input);
 
     expect(result.redacted).toBe(
       [
-        "OPENAI_API_KEY=[REDACTED:OpenAI API Key]",
-        "GITHUB_TOKEN=[REDACTED:GitHub PAT]",
-        "AWS_KEY=[REDACTED:AWS Access Key]",
+        "openai [REDACTED:OpenAI API Key]",
+        "github [REDACTED:GitHub PAT]",
+        "aws [REDACTED:AWS Access Key]",
       ].join("\n"),
     );
 

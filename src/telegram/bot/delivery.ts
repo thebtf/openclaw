@@ -336,6 +336,7 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   proxyFetch?: typeof fetch,
+  apiRoot?: string,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -431,7 +432,7 @@ export async function resolveMedia(
           });
         }
         return {
-          path: saved?.path || undefined,
+          path: saved?.path ?? "",
           contentType: saved?.contentType,
           placeholder: "<media:sticker>",
           stickerMetadata: {

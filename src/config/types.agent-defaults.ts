@@ -207,6 +207,8 @@ export type AgentDefaultsConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
+  /** Default reasoning level when no /reasoning directive is present. */
+  reasoningDefault?: "off" | "on" | "stream";
   timeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
@@ -323,6 +325,12 @@ export type AgentCompactionConfig = {
    * Set to [] to disable post-compaction context injection entirely.
    */
   postCompactionSections?: string[];
+  /** Timeout in milliseconds for compaction runs (default: provider-specific). */
+  timeoutMs?: number;
+  /** Override model for compaction summarization (provider/model string). */
+  model?: string;
+  /** Enable compaction model override (must be true for `model` to take effect). */
+  overrideModel?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

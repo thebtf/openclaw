@@ -4,7 +4,6 @@ import type { HeimdallConfig, SenderTier } from "../security/heimdall/types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import type { HeimdallConfig, SenderTier } from "../security/heimdall/types.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
 

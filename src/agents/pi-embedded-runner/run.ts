@@ -655,7 +655,7 @@ export async function runEmbeddedPiAgent(
             }) ?? "rate_limit")
           : null;
         const allowRateLimitCooldownProbe =
-          params.allowRateLimitCooldownProbe === true &&
+          params.allowTransientCooldownProbe === true &&
           allAutoProfilesInCooldown &&
           unavailableReason === "rate_limit";
         let didRateLimitCooldownProbe = false;

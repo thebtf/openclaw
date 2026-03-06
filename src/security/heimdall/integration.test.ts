@@ -187,7 +187,8 @@ describe("Heimdall Full Pipeline Integration", () => {
         received.push(p);
       };
       const wrapped = wrapBlockReplyWithFilter(original, baseConfig);
-      await wrapped({ text: "Token: ghp_abcdefghijklmnopqrstuvwxyz0123456789" });
+      // Use a non-triggering prefix to avoid "Generic Secret Assignment" matching "Token:"
+      await wrapped({ text: "PAT ghp_abcdefghijklmnopqrstuvwxyz0123456789" });
       expect(received[0].text).toContain("[REDACTED:GitHub PAT]");
     });
   });

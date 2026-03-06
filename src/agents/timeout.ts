@@ -58,7 +58,7 @@ export function resolveMaxRunTimeoutMs(opts: {
   overrideSeconds?: number | null;
 }): number | null {
   const clampTimeoutMs = (valueMs: number) => Math.min(Math.max(valueMs, 1), MAX_SAFE_TIMEOUT_MS);
-  const rawCfg = normalizeNumber(opts.cfg?.agents?.defaults?.maxRunTimeoutSeconds);
+  const rawCfg = normalizeNumber(opts.cfg?.agents?.defaults?.timeoutSeconds);
   const rawOverride = normalizeNumber(opts.overrideSeconds);
   const seconds = rawOverride ?? rawCfg ?? DEFAULT_MAX_RUN_TIMEOUT_SECONDS;
   if (seconds <= 0) {
