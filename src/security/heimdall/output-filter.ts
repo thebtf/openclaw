@@ -9,33 +9,24 @@
  */
 
 import safeRegex from "safe-regex2";
-import { DEPLOYMENT_PATTERNS } from "./patterns.js";
 import type {
   OutputFilterConfig,
   OutputFilterPattern,
   RedactionMatch,
   RedactionResult,
 } from "./types.js";
-
-// Split deployment patterns: specific patterns (with unique prefixes like sk-ant-,
-// xox*-, etc.) must match before our generic sk- / ghp_ patterns, while generic
-// context-anchored patterns (KEY=..., TOKEN=...) must come LAST so they don't
-// shadow the more specific patterns.
-const DEPLOYMENT_SPECIFIC = DEPLOYMENT_PATTERNS.filter((p) => !p.name.startsWith("Generic"));
-const DEPLOYMENT_GENERIC = DEPLOYMENT_PATTERNS.filter((p) => p.name.startsWith("Generic"));
+import { DEPLOYMENT_PATTERNS } from "./patterns.js";
 
 export const BUILTIN_PATTERNS: OutputFilterPattern[] = [
-  // Specific deployment patterns first (sk-ant-, xox*-, Telegram bot tokens, etc.)
-  ...DEPLOYMENT_SPECIFIC,
-  // Then our specific provider patterns
+  // DEPLOYMENT_PATTERNS first: more specific patterns (sk-ant-, xox*-, etc.)
+  // must match before the generic sk- pattern to ensure correct attribution.
+  ...DEPLOYMENT_PATTERNS,
   { name: "OpenAI API Key", regex: "sk-(?!ant-)[a-zA-Z0-9_\\-]{20,}", flags: "g" },
   { name: "GitHub PAT", regex: "ghp_[a-zA-Z0-9]{36,}", flags: "g" },
   { name: "GitHub OAuth", regex: "gho_[a-zA-Z0-9]{36,}", flags: "g" },
   { name: "GitHub App", regex: "ghs_[a-zA-Z0-9]{36,}", flags: "g" },
   { name: "Bearer Token", regex: "Bearer\\s+[a-zA-Z0-9._\\-]{20,}", flags: "g" },
   { name: "AWS Access Key", regex: "AKIA[A-Z0-9]{16}", flags: "g" },
-  // Generic context-anchored patterns last (KEY=..., TOKEN=..., SECRET=...)
-  ...DEPLOYMENT_GENERIC,
 ];
 
 /** Self-test: validate all built-in patterns are safe from ReDoS at load time. */

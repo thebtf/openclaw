@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { HeimdallConfig } from "../security/heimdall/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type {
   BlockStreamingChunkConfig,
@@ -185,8 +186,6 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
-  /** Default reasoning display level when no /reasoning directive is present. Overrides model-capability auto-detection. */
-  reasoningDefault?: "off" | "on" | "stream";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
@@ -209,12 +208,6 @@ export type AgentDefaultsConfig = {
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
   timeoutSeconds?: number;
-  /**
-   * Absolute wall-clock hard cap for a single agent run in seconds (0 = disabled).
-   * Unlike `timeoutSeconds` (which resets on agent activity), this fires unconditionally.
-   * Use to prevent infinite loops that keep resetting the idle timeout.
-   */
-  maxRunTimeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**
@@ -290,6 +283,8 @@ export type AgentDefaultsConfig = {
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
   };
+  /** Heimdall security layer (deterministic tool ACL, output redaction, input sanitization). */
+  heimdall?: HeimdallConfig;
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
 };
@@ -322,12 +317,12 @@ export type AgentCompactionConfig = {
   qualityGuard?: AgentCompactionQualityGuardConfig;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
-  /** Timeout in ms for compaction summarization (default: 120000). */
-  timeoutMs?: number;
-  /** Model override for compaction (e.g. "openai/gpt-4o-mini"). */
-  model?: string;
-  /** Enable the model override (default: false). When false, the primary model is used. */
-  overrideModel?: boolean;
+  /**
+   * H2/H3 section names from AGENTS.md to inject after compaction.
+   * Defaults to ["Session Startup", "Red Lines"] when unset.
+   * Set to [] to disable post-compaction context injection entirely.
+   */
+  postCompactionSections?: string[];
 };
 
 export type AgentCompactionMemoryFlushConfig = {

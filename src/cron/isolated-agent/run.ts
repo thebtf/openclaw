@@ -1,3 +1,7 @@
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentDefaultsConfig } from "../../config/types.js";
+import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -36,7 +40,8 @@ import {
   normalizeVerboseLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
-import type { CliDeps } from "../../cli/outbound-send-deps.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionTranscriptPath,
@@ -54,7 +59,6 @@ import {
   isExternalHookSession,
 } from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
-import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   dispatchCronDelivery,
   matchesMessagingToolDeliveryTarget,
@@ -538,6 +542,10 @@ export async function runCronIsolatedAgentTurn(params: {
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            // Task 2.2: Mark cron jobs as internal runtime calls (SYSTEM tier).
+            internal: true,
+            // Heimdall: cron jobs always run as OWNER.
+            senderIsOwner: true,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
