@@ -78,6 +78,13 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
 }
 
+/**
+ * Hard cap for the findings portion of subagent completion messages.
+ * Leaves headroom for the header line and channel-specific limits (Telegram 4096).
+ */
+const MAX_FINDINGS_CHARS = 3500;
+
+
 function summarizeDeliveryError(error: unknown): string {
   if (error instanceof Error) {
     return error.message || "error";
@@ -1337,7 +1344,11 @@ export async function runSubagentAnnounceFlow(params: {
 
     const taskLabel = params.label || params.task || "task";
     const announceSessionId = childSessionId || "unknown";
-    const findings = childCompletionFindings || reply || "(no output)";
+    const rawFindings = childCompletionFindings || reply || "(no output)";
+    const findings =
+      rawFindings.length > MAX_FINDINGS_CHARS
+        ? rawFindings.slice(0, MAX_FINDINGS_CHARS) + "\n\n[…truncated]"
+        : rawFindings;
 
     let requesterIsSubagent = requesterDepth >= 1;
     if (requesterIsSubagent) {
