@@ -145,6 +145,24 @@ export type BuildTelegramMessageContextParams = {
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
   /** Global (per-account) handler for sendChatAction 401 backoff (#27092). */
   sendChatActionHandler: import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;
+  /**
+   * When true, bypasses the mention gate so a prefilter-approved message can
+   * proceed to full context construction even without an @mention.
+   */
+  bypassMentionGate?: boolean;
+};
+
+/**
+ * Returned by buildTelegramMessageContext when a group message was stopped by
+ * the mention gate (requireMention: true, no @mention, no reply-to-bot) but a
+ * prefilter hook should have the chance to override the drop decision.
+ *
+ * Handlers should fire a message:prefilter hook with `data`, then re-call
+ * buildTelegramMessageContext with `bypassMentionGate: true` if approved.
+ */
+export type MentionGateSkipped = {
+  readonly mentionGateSkipped: true;
+  readonly data: import("../hooks/internal-hooks.js").MessagePrefilterHookContext;
 };
 
 async function resolveStickerVisionSupport(params: {
@@ -187,6 +205,7 @@ export const buildTelegramMessageContext = async ({
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
   sendChatActionHandler,
+  bypassMentionGate,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
@@ -605,7 +624,7 @@ export const buildTelegramMessageContext = async ({
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-  if (isGroup && requireMention && canDetectMention) {
+  if (isGroup && requireMention && canDetectMention && !bypassMentionGate) {
     if (mentionGate.shouldSkip) {
       logger.info({ chatId, reason: "no-mention" }, "skipping group message");
       recordPendingHistoryEntryIfEnabled({
@@ -621,7 +640,17 @@ export const buildTelegramMessageContext = async ({
             }
           : null,
       });
-      return null;
+      return {
+        mentionGateSkipped: true,
+        data: {
+          accountId: account.accountId,
+          channel: "telegram",
+          chatId: String(chatId),
+          messageId: typeof msg.message_id === "number" ? String(msg.message_id) : "",
+          text: rawBody,
+          senderId: senderId || undefined,
+        },
+      } satisfies MentionGateSkipped;
     }
   }
 
@@ -977,6 +1006,7 @@ export const buildTelegramMessageContext = async ({
   };
 };
 
-export type TelegramMessageContext = NonNullable<
-  Awaited<ReturnType<typeof buildTelegramMessageContext>>
+export type TelegramMessageContext = Exclude<
+  NonNullable<Awaited<ReturnType<typeof buildTelegramMessageContext>>>,
+  MentionGateSkipped
 >;
