@@ -1516,6 +1516,10 @@ export async function runEmbeddedAttempt(
         onAssistantMessageStart: params.onAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
+        // Abort prompt early on rate limit / failover errors so pi-ai's internal
+        // retry doesn't block us for minutes.  Simulates a timeout so the outer
+        // run loop triggers model fallback via the standard rotation path.
+        onFailoverAbort: () => abortRun(true),
         config: params.config,
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,

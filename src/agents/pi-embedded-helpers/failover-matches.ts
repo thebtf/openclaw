@@ -89,6 +89,8 @@ const ERROR_PATTERNS = {
     "messages.1.content.1.tool_use.id",
     "invalid request format",
     /tool call id was.*must be/i,
+    // Google INVALID_ARGUMENT (400) from unleashed-agm/Gemini thinking requests
+    "invalid argument",
   ],
 } as const;
 
