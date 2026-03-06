@@ -1,30 +1,12 @@
+import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverReason,
-  isAuthPermanentErrorMessage,
+  classifyFailoverReasonFromHttpStatus,
+  isTimeoutErrorMessage,
   type FailoverReason,
 } from "./pi-embedded-helpers.js";
 
-const TIMEOUT_HINT_RE =
-  /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
-
-/** Node.js and undici error codes that indicate network-level failures. */
-const NETWORK_ERROR_CODES = new Set([
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "ECONNRESET",
-  "ECONNABORTED",
-  "ENOTFOUND",
-  "ECONNREFUSED",
-  "EPIPE",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "ERR_STREAM_PREMATURE_CLOSE",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_SOCKET",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-]);
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -77,6 +59,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 400;
     case "model_not_found":
       return 404;
+    case "session_expired":
+      return 410; // Gone - session no longer exists
     default:
       return undefined;
   }
@@ -96,13 +80,6 @@ function getStatusCode(err: unknown): number | undefined {
     return Number(candidate);
   }
   return undefined;
-}
-
-function getErrorName(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  return "name" in err ? String(err.name) : "";
 }
 
 function getErrorCode(err: unknown): string | undefined {
@@ -143,11 +120,11 @@ function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (getErrorName(err) === "TimeoutError") {
+  if (readErrorName(err) === "TimeoutError") {
     return true;
   }
   const message = getErrorMessage(err);
-  return Boolean(message && TIMEOUT_HINT_RE.test(message));
+  return Boolean(message && isTimeoutErrorMessage(message));
 }
 
 export function isTimeoutError(err: unknown): boolean {
@@ -157,7 +134,7 @@ export function isTimeoutError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
-  if (getErrorName(err) !== "AbortError") {
+  if (readErrorName(err) !== "AbortError") {
     return false;
   }
   const message = getErrorMessage(err);
@@ -175,48 +152,31 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
 
   const status = getStatusCode(err);
-  if (status === 402) {
-    return "billing";
-  }
-  if (status === 429) {
-    return "rate_limit";
-  }
-  if (status === 401 || status === 403) {
-    const msg = getErrorMessage(err);
-    if (msg && isAuthPermanentErrorMessage(msg)) {
-      return "auth_permanent";
-    }
-    return "auth";
-  }
-  if (status === 408) {
-    return "timeout";
-  }
-  if (status === 502 || status === 503 || status === 504) {
-    return "timeout";
-  }
-  if (status === 400) {
-    return "format";
-  }
-  if (status && status >= 500 && status < 600) {
-    return "timeout";
+  const message = getErrorMessage(err);
+  const statusReason = classifyFailoverReasonFromHttpStatus(status, message);
+  if (statusReason) {
+    return statusReason;
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (code && NETWORK_ERROR_CODES.has(code)) {
+  if (
+    [
+      "ETIMEDOUT",
+      "ESOCKETTIMEDOUT",
+      "ECONNRESET",
+      "ECONNABORTED",
+      "ECONNREFUSED",
+      "ENETUNREACH",
+      "EHOSTUNREACH",
+      "ENETRESET",
+      "EAI_AGAIN",
+    ].includes(code)
+  ) {
     return "timeout";
-  }
-  // Walk cause chain for wrapped errors (e.g. TypeError: fetch failed → cause.code)
-  if (!code && err instanceof Error && err.cause && typeof err.cause === "object") {
-    const causeCode = (err.cause as { code?: unknown }).code;
-    if (typeof causeCode === "string" && NETWORK_ERROR_CODES.has(causeCode.toUpperCase())) {
-      return "timeout";
-    }
   }
   if (isTimeoutError(err)) {
     return "timeout";
   }
-
-  const message = getErrorMessage(err);
   if (!message) {
     return null;
   }

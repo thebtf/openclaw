@@ -1,5 +1,4 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { HeimdallConfig } from "../security/heimdall/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type {
   BlockStreamingChunkConfig,
@@ -123,6 +122,12 @@ export type AgentDefaultsConfig = {
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
+  /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
+  pdfModel?: AgentModelConfig;
+  /** Maximum PDF file size in megabytes (default: 10). */
+  pdfMaxBytesMb?: number;
+  /** Maximum number of PDF pages to process (default: 20). */
+  pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
@@ -135,6 +140,13 @@ export type AgentDefaultsConfig = {
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
+  /**
+   * Agent-visible bootstrap truncation warning mode:
+   * - off: do not inject warning text
+   * - once: inject once per unique truncation signature (default)
+   * - always: inject on every run with truncation
+   */
+  bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
@@ -172,9 +184,7 @@ export type AgentDefaultsConfig = {
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-  /** Default reasoning display level when no /reasoning directive is present. Overrides model-capability auto-detection. */
-  reasoningDefault?: "off" | "on" | "stream";
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
@@ -197,12 +207,6 @@ export type AgentDefaultsConfig = {
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
   timeoutSeconds?: number;
-  /**
-   * Absolute wall-clock hard cap for a single agent run in seconds (0 = disabled).
-   * Unlike `timeoutSeconds` (which resets on agent activity), this fires unconditionally.
-   * Use to prevent infinite loops that keep resetting the idle timeout.
-   */
-  maxRunTimeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**
@@ -245,6 +249,11 @@ export type AgentDefaultsConfig = {
     /** Suppress tool error warning payloads during heartbeat runs. */
     suppressToolErrorWarnings?: boolean;
     /**
+     * If true, run heartbeat turns with lightweight bootstrap context.
+     * Lightweight mode keeps only HEARTBEAT.md from workspace bootstrap files.
+     */
+    lightContext?: boolean;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *
@@ -273,14 +282,18 @@ export type AgentDefaultsConfig = {
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
   };
-  /** Heimdall security layer (deterministic tool ACL, output redaction, input sanitization). */
-  heimdall?: HeimdallConfig;
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
+export type AgentCompactionQualityGuardConfig = {
+  /** Enable compaction summary quality audits and regeneration retries. Default: false. */
+  enabled?: boolean;
+  /** Maximum regeneration retries after a failed quality audit. Default: 1 when enabled. */
+  maxRetries?: number;
+};
 
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
@@ -297,14 +310,10 @@ export type AgentCompactionConfig = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
   identifierInstructions?: string;
+  /** Optional quality-audit retries for safeguard compaction summaries. */
+  qualityGuard?: AgentCompactionQualityGuardConfig;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
-  /** Timeout in ms for compaction summarization (default: 120000). */
-  timeoutMs?: number;
-  /** Model override for compaction (e.g. "openai/gpt-4o-mini"). */
-  model?: string;
-  /** Enable the model override (default: false). When false, the primary model is used. */
-  overrideModel?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
@@ -312,6 +321,11 @@ export type AgentCompactionMemoryFlushConfig = {
   enabled?: boolean;
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
+  /**
+   * Force a memory flush when transcript size reaches this threshold
+   * (bytes, or byte-size string like "2mb"). Set to 0 to disable.
+   */
+  forceFlushTranscriptBytes?: number | string;
   /** User prompt used for the memory flush turn (NO_REPLY is enforced if missing). */
   prompt?: string;
   /** System prompt appended for the memory flush turn. */

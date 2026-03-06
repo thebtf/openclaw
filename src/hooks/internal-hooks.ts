@@ -85,6 +85,10 @@ export type MessageSentHookContext = {
   conversationId?: string;
   /** Message ID returned by the provider */
   messageId?: string;
+  /** Whether this message was sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
 };
 
 export type MessageSentHookEvent = InternalHookEvent & {
@@ -93,34 +97,90 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
-// ============================================================================
-// Message Prefilter Hook Event
-//
-// Fires when a group message would be dropped by the mention gate
-// (requireMention: true, no @mention, no reply-to-bot).
-// Hooks can leave event unmodified to forward the message to the agent,
-// or set event.cancelled = true to drop it.
-// ============================================================================
-
-export type MessagePrefilterHookContext = {
-  /** Provider account ID (e.g. "jeeves") */
-  accountId: string;
-  /** Channel identifier (e.g. "telegram") */
-  channel: string;
+export type MessageTranscribedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from?: string;
+  /** Recipient identifier */
+  to?: string;
+  /** Original raw message body (e.g., "🎤 [Audio]") */
+  body?: string;
+  /** Enriched body shown to the agent, including transcript */
+  bodyForAgent?: string;
+  /** The transcribed text from audio */
+  transcript: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
   /** Conversation/chat ID */
-  chatId: string;
-  /** Raw message text */
-  text: string;
+  conversationId?: string;
   /** Message ID from the provider */
-  messageId: string;
-  /** Sender identifier */
+  messageId?: string;
+  /** Sender user ID */
   senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username */
+  senderUsername?: string;
+  /** Provider name */
+  provider?: string;
+  /** Surface name */
+  surface?: string;
+  /** Path to the media file that was transcribed */
+  mediaPath?: string;
+  /** MIME type of the media */
+  mediaType?: string;
 };
 
-export type MessagePrefilterHookEvent = InternalHookEvent & {
+export type MessageTranscribedHookEvent = InternalHookEvent & {
   type: "message";
-  action: "prefilter";
-  context: MessagePrefilterHookContext;
+  action: "transcribed";
+  context: MessageTranscribedHookContext;
+};
+
+export type MessagePreprocessedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from?: string;
+  /** Recipient identifier */
+  to?: string;
+  /** Original raw message body */
+  body?: string;
+  /** Fully enriched body shown to the agent (transcripts, image descriptions, link summaries) */
+  bodyForAgent?: string;
+  /** Transcribed audio text, if the message contained audio */
+  transcript?: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Sender user ID */
+  senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username */
+  senderUsername?: string;
+  /** Provider name */
+  provider?: string;
+  /** Surface name */
+  surface?: string;
+  /** Path to the media file, if present */
+  mediaPath?: string;
+  /** MIME type of the media, if present */
+  mediaType?: string;
+  /** Whether this message was sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
+};
+
+export type MessagePreprocessedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "preprocessed";
+  context: MessagePreprocessedHookContext;
 };
 
 export interface InternalHookEvent {
@@ -136,20 +196,27 @@ export interface InternalHookEvent {
   timestamp: Date;
   /** Messages to send back to the user (hooks can push to this array) */
   messages: string[];
-  /**
-   * Set by a handler to signal that the caller should skip further processing.
-   * All handlers still run (error isolation preserved). Caller checks this after
-   * triggerInternalHook returns.
-   */
-  cancelled?: boolean;
-  /** Human-readable reason for cancellation, set alongside cancelled */
-  cancelReason?: string;
 }
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
-/** Registry of hook handlers by event key */
-const handlers = new Map<string, InternalHookHandler[]>();
+/**
+ * Registry of hook handlers by event key.
+ *
+ * Uses a globalThis singleton so that registerInternalHook and
+ * triggerInternalHook always share the same Map even when the bundler
+ * emits multiple copies of this module into separate chunks (bundle
+ * splitting). Without the singleton, handlers registered in one chunk
+ * are invisible to triggerInternalHook in another chunk, causing hooks
+ * to silently fire with zero handlers.
+ */
+const _g = globalThis as typeof globalThis & {
+  __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
+};
+const handlers = (_g.__openclaw_internal_hook_handlers__ ??= new Map<
+  string,
+  InternalHookHandler[]
+>());
 const log = createSubsystemLogger("internal-hooks");
 
 /**
@@ -271,66 +338,111 @@ export function createInternalHookEvent(
   };
 }
 
-/**
- * Check if a hook event has been cancelled by a handler.
- * Use after triggerInternalHook to decide whether to skip further processing.
- */
-export function isCancelledEvent(event: InternalHookEvent): boolean {
-  return Boolean(event.cancelled);
+function isHookEventTypeAndAction(
+  event: InternalHookEvent,
+  type: InternalHookEventType,
+  action: string,
+): boolean {
+  return event.type === type && event.action === action;
+}
+
+function getHookContext<T extends Record<string, unknown>>(
+  event: InternalHookEvent,
+): Partial<T> | null {
+  const context = event.context as Partial<T> | null;
+  if (!context || typeof context !== "object") {
+    return null;
+  }
+  return context;
+}
+
+function hasStringContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "string";
+}
+
+function hasBooleanContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "boolean";
 }
 
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
-  if (event.type !== "agent" || event.action !== "bootstrap") {
+  if (!isHookEventTypeAndAction(event, "agent", "bootstrap")) {
     return false;
   }
-  const context = event.context as Partial<AgentBootstrapHookContext> | null;
-  if (!context || typeof context !== "object") {
+  const context = getHookContext<AgentBootstrapHookContext>(event);
+  if (!context) {
     return false;
   }
-  if (typeof context.workspaceDir !== "string") {
+  if (!hasStringContextField(context, "workspaceDir")) {
     return false;
   }
   return Array.isArray(context.bootstrapFiles);
 }
 
 export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
-  if (event.type !== "gateway" || event.action !== "startup") {
+  if (!isHookEventTypeAndAction(event, "gateway", "startup")) {
     return false;
   }
-  const context = event.context as GatewayStartupHookContext | null;
-  return Boolean(context && typeof context === "object");
+  return Boolean(getHookContext<GatewayStartupHookContext>(event));
 }
 
 export function isMessageReceivedEvent(
   event: InternalHookEvent,
 ): event is MessageReceivedHookEvent {
-  if (event.type !== "message" || event.action !== "received") {
+  if (!isHookEventTypeAndAction(event, "message", "received")) {
     return false;
   }
-  const context = event.context as Partial<MessageReceivedHookContext> | null;
-  if (!context || typeof context !== "object") {
+  const context = getHookContext<MessageReceivedHookContext>(event);
+  if (!context) {
     return false;
   }
-  return typeof context.from === "string" && typeof context.channelId === "string";
-}
-
-export function isMessagePrefilterEvent(
-  event: InternalHookEvent,
-): event is MessagePrefilterHookEvent {
-  return event.type === "message" && event.action === "prefilter";
+  return hasStringContextField(context, "from") && hasStringContextField(context, "channelId");
 }
 
 export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
-  if (event.type !== "message" || event.action !== "sent") {
+  if (!isHookEventTypeAndAction(event, "message", "sent")) {
     return false;
   }
-  const context = event.context as Partial<MessageSentHookContext> | null;
-  if (!context || typeof context !== "object") {
+  const context = getHookContext<MessageSentHookContext>(event);
+  if (!context) {
     return false;
   }
   return (
-    typeof context.to === "string" &&
-    typeof context.channelId === "string" &&
-    typeof context.success === "boolean"
+    hasStringContextField(context, "to") &&
+    hasStringContextField(context, "channelId") &&
+    hasBooleanContextField(context, "success")
   );
+}
+
+export function isMessageTranscribedEvent(
+  event: InternalHookEvent,
+): event is MessageTranscribedHookEvent {
+  if (!isHookEventTypeAndAction(event, "message", "transcribed")) {
+    return false;
+  }
+  const context = getHookContext<MessageTranscribedHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasStringContextField(context, "transcript") && hasStringContextField(context, "channelId")
+  );
+}
+
+export function isMessagePreprocessedEvent(
+  event: InternalHookEvent,
+): event is MessagePreprocessedHookEvent {
+  if (!isHookEventTypeAndAction(event, "message", "preprocessed")) {
+    return false;
+  }
+  const context = getHookContext<MessagePreprocessedHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return hasStringContextField(context, "channelId");
 }

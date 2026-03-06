@@ -36,6 +36,10 @@ export type SubscribeEmbeddedPiSessionParams = {
   onFailoverAbort?: () => void;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  sessionId?: string;
+  /** Agent identity for hook context — resolved from session config in attempt.ts. */
+  agentId?: string;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

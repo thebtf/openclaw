@@ -1,10 +1,14 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
-import { deliverReplies, resolveMedia } from "./delivery.js";
-import type { TelegramContext } from "./types.js";
+import { deliverReplies } from "./delivery.js";
 
 const loadWebMedia = vi.fn();
+const messageHookRunner = vi.hoisted(() => ({
+  hasHooks: vi.fn<(name: string) => boolean>(() => false),
+  runMessageSending: vi.fn(),
+  runMessageSent: vi.fn(),
+}));
 const baseDeliveryParams = {
   chatId: "123",
   token: "tok",
@@ -23,21 +27,8 @@ vi.mock("../../web/media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
 
-const mockFetchRemoteMedia = vi.fn();
-vi.mock("../../media/fetch.js", () => ({
-  fetchRemoteMedia: (...args: unknown[]) => mockFetchRemoteMedia(...args),
-}));
-
-const mockSaveMediaBuffer = vi.fn();
-vi.mock("../../media/store.js", () => ({
-  saveMediaBuffer: (...args: unknown[]) => mockSaveMediaBuffer(...args),
-}));
-
-const mockGetCachedSticker = vi.fn();
-const mockCacheSticker = vi.fn();
-vi.mock("../sticker-cache.js", () => ({
-  getCachedSticker: (...args: unknown[]) => mockGetCachedSticker(...args),
-  cacheSticker: (...args: unknown[]) => mockCacheSticker(...args),
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => messageHookRunner,
 }));
 
 vi.mock("grammy", () => ({
@@ -95,6 +86,12 @@ function createVoiceMessagesForbiddenError() {
   );
 }
 
+function createThreadNotFoundError(operation = "sendMessage") {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: message thread not found)`,
+  );
+}
+
 function createVoiceFailureHarness(params: {
   voiceError: Error;
   sendMessageResult?: { message_id: number; chat: { id: string } };
@@ -111,6 +108,10 @@ function createVoiceFailureHarness(params: {
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockClear();
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.hasHooks.mockReturnValue(false);
+    messageHookRunner.runMessageSending.mockReset();
+    messageHookRunner.runMessageSent.mockReset();
   });
 
   it("skips audioAsVoice-only payloads without logging an error", async () => {
@@ -123,6 +124,107 @@ describe("deliverReplies", () => {
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("skips malformed replies and continues with valid entries", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [undefined, { text: "hello" }] as unknown as DeliverRepliesParams["replies"],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toBe("hello");
+  });
+
+  it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "" });
+
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, content: "" }),
+      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
+  it("passes accountId into message hooks", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      accountId: "work",
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        channelId: "telegram",
+        accountId: "work",
+        conversationId: "123",
+      }),
+    );
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true }),
+      expect.objectContaining({
+        channelId: "telegram",
+        accountId: "work",
+        conversationId: "123",
+      }),
+    );
+  });
+
+  it("passes media metadata to message_sending hooks", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+
+    const runtime = createRuntime(false);
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 2, chat: { id: "123" } });
+    const bot = createBot({ sendPhoto });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ text: "caption", mediaUrl: "https://example.com/photo.jpg" }],
+      runtime,
+      bot,
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "123",
+        content: "caption",
+        metadata: expect.objectContaining({
+          channel: "telegram",
+          mediaUrls: ["https://example.com/photo.jpg"],
+        }),
+      }),
+      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
   });
 
   it("invokes onVoiceRecording before sending a voice note", async () => {
@@ -241,6 +343,82 @@ describe("deliverReplies", () => {
         message_thread_id: 42,
       }),
     );
+  });
+
+  it("retries DM topic sends without message_thread_id when thread is missing", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createThreadNotFoundError("sendMessage"))
+      .mockResolvedValueOnce({
+        message_id: 7,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+      thread: { id: 42, scope: "dm" },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        message_thread_id: 42,
+      }),
+    );
+    expect(sendMessage.mock.calls[1]?.[2]).not.toHaveProperty("message_thread_id");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not retry forum sends without message_thread_id", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockRejectedValue(createThreadNotFoundError("sendMessage"));
+    const bot = createBot({ sendMessage });
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "hello" }],
+        runtime,
+        bot,
+        thread: { id: 42, scope: "forum" },
+      }),
+    ).rejects.toThrow("message thread not found");
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries media sends without message_thread_id for DM topics", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createThreadNotFoundError("sendPhoto"))
+      .mockResolvedValueOnce({
+        message_id: 8,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendPhoto });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "caption" }],
+      runtime,
+      bot,
+      thread: { id: 42, scope: "dm" },
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expect(sendPhoto.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        message_thread_id: 42,
+      }),
+    );
+    expect(sendPhoto.mock.calls[1]?.[2]).not.toHaveProperty("message_thread_id");
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("does not include link_preview_options when linkPreview is true", async () => {
@@ -377,6 +555,55 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("voice fallback applies reply-to only on first chunk when replyToMode is first", async () => {
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: {
+        message_id: 6,
+        chat: { id: "123" },
+      },
+    });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          text: "chunk-one\n\nchunk-two",
+          replyToId: "77",
+          audioAsVoice: true,
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Ack", callback_data: "ack" }]],
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+      replyToMode: "first",
+      replyQuoteText: "quoted context",
+      textLimit: 12,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({
+        reply_to_message_id: 77,
+        reply_markup: {
+          inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
+        },
+      }),
+    );
+    expect(sendMessage.mock.calls[1][2]).not.toEqual(
+      expect.objectContaining({ reply_to_message_id: 77 }),
+    );
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
+  });
+
   it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendVoice", async () => {
     const runtime = createRuntime();
     const sendVoice = vi.fn().mockRejectedValue(new Error("Network error"));
@@ -398,6 +625,128 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("replyToMode 'first' only applies reply-to to the first text chunk", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 20,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    // Use a small textLimit to force multiple chunks
+    await deliverReplies({
+      replies: [{ text: "chunk-one\n\nchunk-two", replyToId: "700" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 12,
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // First chunk should have reply_to_message_id
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ reply_to_message_id: 700 }),
+    );
+    // Second chunk should NOT have reply_to_message_id
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("replyToMode 'all' applies reply-to to every text chunk", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 21,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "chunk-one\n\nchunk-two", replyToId: "800" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "all",
+      textLimit: 12,
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // Both chunks should have reply_to_message_id
+    for (const call of sendMessage.mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ reply_to_message_id: 800 }));
+    }
+  });
+
+  it("replyToMode 'first' only applies reply-to to first media item", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 30,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendPhoto });
+
+    mockMediaLoad("a.jpg", "image/jpeg", "img1");
+    mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+    await deliverReplies({
+      replies: [{ mediaUrls: ["https://a.jpg", "https://b.jpg"], replyToId: "900" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 4000,
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    // First media should have reply_to_message_id
+    expect(sendPhoto.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ reply_to_message_id: 900 }),
+    );
+    // Second media should NOT have reply_to_message_id
+    expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("pins the first delivered text message when telegram pin is requested", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 101, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 102, chat: { id: "123" } });
+    const pinChatMessage = vi.fn().mockResolvedValue(true);
+    const bot = createBot({ sendMessage, pinChatMessage });
+
+    await deliverReplies({
+      replies: [{ text: "chunk-one\n\nchunk-two", channelData: { telegram: { pin: true } } }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 12,
+    });
+
+    expect(pinChatMessage).toHaveBeenCalledTimes(1);
+    expect(pinChatMessage).toHaveBeenCalledWith("123", 101, { disable_notification: true });
+  });
+
+  it("continues when pinning fails", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 201, chat: { id: "123" } });
+    const pinChatMessage = vi.fn().mockRejectedValue(new Error("pin failed"));
+    const bot = createBot({ sendMessage, pinChatMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello", channelData: { telegram: { pin: true } } }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(pinChatMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
     const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
       voiceError: createVoiceMessagesForbiddenError(),
@@ -415,603 +764,5 @@ describe("deliverReplies", () => {
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("sends sticker when stickerId is provided", async () => {
-    const runtime = { error: vi.fn() };
-    const sendSticker = vi.fn().mockResolvedValue({
-      message_id: 20,
-      chat: { id: "123" },
-    });
-    const bot = { api: { sendSticker } } as unknown as Bot;
-
-    await deliverReplies({
-      replies: [{ stickerId: "sticker-file-id-123" }],
-      chatId: "123",
-      token: "tok",
-      runtime,
-      bot,
-      replyToMode: "off",
-      textLimit: 4000,
-    });
-
-    expect(sendSticker).toHaveBeenCalledTimes(1);
-    expect(sendSticker).toHaveBeenCalledWith("123", "sticker-file-id-123", expect.any(Object));
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("sends sticker and text when both provided", async () => {
-    const runtime = { error: vi.fn() };
-    const sendSticker = vi.fn().mockResolvedValue({
-      message_id: 21,
-      chat: { id: "123" },
-    });
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 22,
-      chat: { id: "123" },
-    });
-    const bot = { api: { sendSticker, sendMessage } } as unknown as Bot;
-
-    await deliverReplies({
-      replies: [{ stickerId: "sticker-file-id-456", text: "Look at this!" }],
-      chatId: "123",
-      token: "tok",
-      runtime,
-      bot,
-      replyToMode: "off",
-      textLimit: 4000,
-    });
-
-    expect(sendSticker).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.stringContaining("Look at this!"),
-      expect.any(Object),
-    );
-  });
-
-  it("does not send sticker when stickerId is absent (unchanged behavior)", async () => {
-    const runtime = { error: vi.fn(), log: vi.fn() };
-    const sendSticker = vi.fn();
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 23,
-      chat: { id: "123" },
-    });
-    const bot = { api: { sendSticker, sendMessage } } as unknown as Bot;
-
-    await deliverReplies({
-      replies: [{ text: "Just text" }],
-      chatId: "123",
-      token: "tok",
-      runtime,
-      bot,
-      replyToMode: "off",
-      textLimit: 4000,
-    });
-
-    expect(sendSticker).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("resolveMedia", () => {
-  const TOKEN = "test-token";
-  const MAX_BYTES = 5 * 1024 * 1024;
-
-  function makeFetchMock(
-    responses: Record<string, { ok: boolean; json?: unknown; buffer?: Buffer }>,
-  ) {
-    return vi.fn(async (url: string) => {
-      const match = Object.entries(responses).find(([pattern]) => url.includes(pattern));
-      const resp = match?.[1] ?? { ok: false };
-      return {
-        ok: resp.ok,
-        status: resp.ok ? 200 : 404,
-        json: async () => resp.json,
-        arrayBuffer: async () => (resp.buffer ?? Buffer.alloc(0)).buffer,
-        headers: new Map([["content-type", "image/webp"]]),
-      };
-    }) as unknown as typeof fetch;
-  }
-
-  beforeEach(() => {
-    mockFetchRemoteMedia.mockReset();
-    mockSaveMediaBuffer.mockReset();
-    mockGetCachedSticker.mockReset();
-    mockCacheSticker.mockReset();
-  });
-
-  it("video sticker with thumbnail returns media with isVideo metadata", async () => {
-    const proxyFetch = makeFetchMock({
-      getFile: {
-        ok: true,
-        json: { ok: true, result: { file_path: "thumbnails/thumb.webp" } },
-      },
-      "file/bot": {
-        ok: true,
-        buffer: Buffer.from("thumb-data"),
-      },
-    });
-    mockGetCachedSticker.mockReturnValue(null);
-    mockFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from("thumb-data"),
-      contentType: "image/webp",
-      fileName: "thumb.webp",
-    });
-    mockSaveMediaBuffer.mockResolvedValue({
-      path: "/tmp/thumb.webp",
-      contentType: "image/webp",
-    });
-
-    const ctx: TelegramContext = {
-      message: {
-        message_id: 1,
-        date: 0,
-        chat: { id: 123, type: "private" },
-        sticker: {
-          file_id: "sticker-file-id",
-          file_unique_id: "sticker-unique-id",
-          type: "regular" as const,
-          width: 512,
-          height: 512,
-          is_animated: false,
-          is_video: true,
-          emoji: "😘",
-          set_name: "VideoStickerPack",
-          thumbnail: {
-            file_id: "thumb-file-id",
-            file_unique_id: "thumb-unique-id",
-            width: 128,
-            height: 128,
-          },
-        },
-      },
-      getFile: vi.fn(),
-    };
-
-    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
-
-    expect(result).not.toBeNull();
-    expect(result!.stickerMetadata?.isVideo).toBe(true);
-    expect(result!.stickerMetadata?.emoji).toBe("😘");
-    expect(result!.stickerMetadata?.setName).toBe("VideoStickerPack");
-    expect(result!.placeholder).toBe("<media:sticker>");
-  });
-
-  it("animated sticker with thumbnail returns media with isAnimated metadata", async () => {
-    const proxyFetch = makeFetchMock({
-      getFile: {
-        ok: true,
-        json: { ok: true, result: { file_path: "thumbnails/thumb.webp" } },
-      },
-      "file/bot": {
-        ok: true,
-        buffer: Buffer.from("thumb-data"),
-      },
-    });
-    mockGetCachedSticker.mockReturnValue(null);
-    mockFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from("thumb-data"),
-      contentType: "image/webp",
-      fileName: "thumb.webp",
-    });
-    mockSaveMediaBuffer.mockResolvedValue({
-      path: "/tmp/thumb.webp",
-      contentType: "image/webp",
-    });
-
-    const ctx: TelegramContext = {
-      message: {
-        message_id: 1,
-        date: 0,
-        chat: { id: 123, type: "private" },
-        sticker: {
-          file_id: "sticker-file-id",
-          file_unique_id: "sticker-unique-id",
-          type: "regular" as const,
-          width: 512,
-          height: 512,
-          is_animated: true,
-          is_video: false,
-          emoji: "🎉",
-          thumbnail: {
-            file_id: "thumb-file-id",
-            file_unique_id: "thumb-unique-id",
-            width: 128,
-            height: 128,
-          },
-        },
-      },
-      getFile: vi.fn(),
-    };
-
-    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
-
-    expect(result).not.toBeNull();
-    expect(result!.stickerMetadata?.isAnimated).toBe(true);
-    expect(result!.stickerMetadata?.isVideo).toBeUndefined();
-  });
-
-  it("video sticker with no thumbnail and no cache returns null", async () => {
-    mockGetCachedSticker.mockReturnValue(null);
-
-    const ctx: TelegramContext = {
-      message: {
-        message_id: 1,
-        date: 0,
-        chat: { id: 123, type: "private" },
-        sticker: {
-          file_id: "sticker-file-id",
-          file_unique_id: "sticker-unique-id",
-          type: "regular" as const,
-          width: 512,
-          height: 512,
-          is_animated: false,
-          is_video: true,
-          // no thumbnail
-        },
-      },
-      getFile: vi.fn(),
-    };
-
-    const proxyFetch = vi.fn() as unknown as typeof fetch;
-    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
-
-    expect(result).toBeNull();
-  });
-
-  it("video sticker with cache hit returns cached description", async () => {
-    mockGetCachedSticker.mockReturnValue({
-      fileId: "sticker-file-id",
-      fileUniqueId: "sticker-unique-id",
-      emoji: "😘",
-      setName: "VideoStickerPack",
-      description: "A kissing face",
-      cachedAt: "2026-01-26T12:00:00.000Z",
-    });
-
-    const ctx: TelegramContext = {
-      message: {
-        message_id: 1,
-        date: 0,
-        chat: { id: 123, type: "private" },
-        sticker: {
-          file_id: "sticker-file-id",
-          file_unique_id: "sticker-unique-id",
-          type: "regular" as const,
-          width: 512,
-          height: 512,
-          is_animated: false,
-          is_video: true,
-          emoji: "😘",
-          set_name: "VideoStickerPack",
-          // no thumbnail needed — cache covers it
-        },
-      },
-      getFile: vi.fn(),
-    };
-
-    const proxyFetch = vi.fn() as unknown as typeof fetch;
-    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
-
-    expect(result).not.toBeNull();
-    expect(result!.stickerMetadata?.cachedDescription).toBe("A kissing face");
-    expect(result!.stickerMetadata?.isVideo).toBe(true);
-    expect(result!.path).toBeUndefined();
-  });
-
-  it("thumbnail download failure returns null gracefully", async () => {
-    const proxyFetch = makeFetchMock({
-      getFile: { ok: false },
-    });
-    mockGetCachedSticker.mockReturnValue(null);
-
-    const ctx: TelegramContext = {
-      message: {
-        message_id: 1,
-        date: 0,
-        chat: { id: 123, type: "private" },
-        sticker: {
-          file_id: "sticker-file-id",
-          file_unique_id: "sticker-unique-id",
-          type: "regular" as const,
-          width: 512,
-          height: 512,
-          is_animated: false,
-          is_video: true,
-          thumbnail: {
-            file_id: "thumb-file-id",
-            file_unique_id: "thumb-unique-id",
-            width: 128,
-            height: 128,
-          },
-        },
-      },
-      getFile: vi.fn(),
-    };
-
-    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
-
-    expect(result).toBeNull();
-  });
-
-  it("static WEBP sticker works unchanged (regression guard)", async () => {
-    mockGetCachedSticker.mockReturnValue(null);
-    mockFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from("webp-data"),
-      contentType: "image/webp",
-      fileName: "sticker.webp",
-    });
-    mockSaveMediaBuffer.mockResolvedValue({
-      path: "/tmp/sticker.webp",
-      contentType: "image/webp",
-    });
-
-    const ctx: TelegramContext = {
-      message: {
-        message_id: 1,
-        date: 0,
-        chat: { id: 123, type: "private" },
-        sticker: {
-          file_id: "sticker-file-id",
-          file_unique_id: "sticker-unique-id",
-          type: "regular" as const,
-          width: 512,
-          height: 512,
-          is_animated: false,
-          is_video: false,
-          emoji: "😎",
-          set_name: "StaticPack",
-        },
-      },
-      getFile: vi.fn().mockResolvedValue({ file_path: "stickers/sticker.webp" }),
-    };
-
-    const proxyFetch = vi.fn() as unknown as typeof fetch;
-    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
-
-    expect(result).not.toBeNull();
-    expect(result!.stickerMetadata?.isVideo).toBeUndefined();
-    expect(result!.stickerMetadata?.isAnimated).toBeUndefined();
-    expect(result!.stickerMetadata?.emoji).toBe("😎");
-    expect(result!.stickerMetadata?.setName).toBe("StaticPack");
-    expect(result!.path).toBe("/tmp/sticker.webp");
-  });
-});
-
-describe("resolveMedia — file URL construction with apiRoot", () => {
-  const TOKEN = "test-token";
-  const MAX_BYTES = 5 * 1024 * 1024;
-
-  function makeVideoStickerCtx(): TelegramContext {
-    return {
-      message: {
-        message_id: 1,
-        date: 0,
-        chat: { id: 123, type: "private" },
-        sticker: {
-          file_id: "sticker-file-id",
-          file_unique_id: "sticker-unique-id",
-          type: "regular" as const,
-          width: 512,
-          height: 512,
-          is_animated: false,
-          is_video: true,
-          thumbnail: {
-            file_id: "thumb-file-id",
-            file_unique_id: "thumb-unique-id",
-            width: 128,
-            height: 128,
-          },
-        },
-      },
-      getFile: vi.fn(),
-    };
-  }
-
-  // proxyFetch handles the raw getFile API call inside downloadStickerThumbnail
-  function makeProxyFetch(): typeof fetch {
-    return vi.fn(async (url: string) => {
-      if (url.includes("getFile")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ ok: true, result: { file_path: "thumbnails/thumb.webp" } }),
-          arrayBuffer: async () => Buffer.alloc(0).buffer,
-          headers: new Map<string, string>(),
-        };
-      }
-      return {
-        ok: false,
-        status: 404,
-        json: async () => ({}),
-        arrayBuffer: async () => Buffer.alloc(0).buffer,
-        headers: new Map<string, string>(),
-      };
-    }) as unknown as typeof fetch;
-  }
-
-  beforeEach(() => {
-    mockFetchRemoteMedia.mockReset();
-    mockSaveMediaBuffer.mockReset();
-    mockGetCachedSticker.mockReset();
-    mockCacheSticker.mockReset();
-  });
-
-  function setupSuccessfulDownload() {
-    mockGetCachedSticker.mockReturnValue(null);
-    mockFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from("thumb-data"),
-      contentType: "image/webp",
-      fileName: "thumb.webp",
-    });
-    mockSaveMediaBuffer.mockResolvedValue({ path: "/tmp/thumb.webp", contentType: "image/webp" });
-  }
-
-  it("uses api.telegram.org for file download when apiRoot is not set", async () => {
-    setupSuccessfulDownload();
-    const ctx = makeVideoStickerCtx();
-
-    await resolveMedia(ctx, MAX_BYTES, TOKEN, makeProxyFetch());
-
-    expect(mockFetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining("https://api.telegram.org/file/bot"),
-      }),
-    );
-  });
-
-  it("uses custom apiRoot for file download when apiRoot is set", async () => {
-    setupSuccessfulDownload();
-    const ctx = makeVideoStickerCtx();
-    const apiRoot = "http://custom.local:8081";
-
-    await resolveMedia(ctx, MAX_BYTES, TOKEN, makeProxyFetch(), apiRoot);
-
-    expect(mockFetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining(`${apiRoot}/file/bot`),
-      }),
-    );
-    expect(mockFetchRemoteMedia).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining("api.telegram.org"),
-      }),
-    );
-  });
-
-  it("strips trailing slashes from apiRoot before constructing file URL", async () => {
-    setupSuccessfulDownload();
-    const ctx = makeVideoStickerCtx();
-
-    await resolveMedia(ctx, MAX_BYTES, TOKEN, makeProxyFetch(), "http://custom.local:8081///");
-
-    expect(mockFetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining("http://custom.local:8081/file/bot"),
-      }),
-    );
-    // No double-slash artifacts from the stripped trailing slashes
-    const calledUrl: string = mockFetchRemoteMedia.mock.calls[0][0].url;
-    expect(calledUrl).not.toMatch(/\/\/\//);
-  });
-});
-
-describe("resolveMedia — file URL construction with apiRoot", () => {
-  const TOKEN = "test-token";
-  const MAX_BYTES = 5 * 1024 * 1024;
-
-  function makeVideoStickerCtx(): TelegramContext {
-    return {
-      message: {
-        message_id: 1,
-        date: 0,
-        chat: { id: 123, type: "private" },
-        sticker: {
-          file_id: "sticker-file-id",
-          file_unique_id: "sticker-unique-id",
-          type: "regular" as const,
-          width: 512,
-          height: 512,
-          is_animated: false,
-          is_video: true,
-          thumbnail: {
-            file_id: "thumb-file-id",
-            file_unique_id: "thumb-unique-id",
-            width: 128,
-            height: 128,
-          },
-        },
-      },
-      getFile: vi.fn(),
-    };
-  }
-
-  // proxyFetch handles the raw getFile API call inside downloadStickerThumbnail
-  function makeProxyFetch(): typeof fetch {
-    return vi.fn(async (url: string) => {
-      if (url.includes("getFile")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ ok: true, result: { file_path: "thumbnails/thumb.webp" } }),
-          arrayBuffer: async () => Buffer.alloc(0).buffer,
-          headers: new Map<string, string>(),
-        };
-      }
-      return {
-        ok: false,
-        status: 404,
-        json: async () => ({}),
-        arrayBuffer: async () => Buffer.alloc(0).buffer,
-        headers: new Map<string, string>(),
-      };
-    }) as unknown as typeof fetch;
-  }
-
-  beforeEach(() => {
-    mockFetchRemoteMedia.mockReset();
-    mockSaveMediaBuffer.mockReset();
-    mockGetCachedSticker.mockReset();
-    mockCacheSticker.mockReset();
-  });
-
-  function setupSuccessfulDownload() {
-    mockGetCachedSticker.mockReturnValue(null);
-    mockFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from("thumb-data"),
-      contentType: "image/webp",
-      fileName: "thumb.webp",
-    });
-    mockSaveMediaBuffer.mockResolvedValue({ path: "/tmp/thumb.webp", contentType: "image/webp" });
-  }
-
-  it("uses api.telegram.org for file download when apiRoot is not set", async () => {
-    setupSuccessfulDownload();
-    const ctx = makeVideoStickerCtx();
-
-    await resolveMedia(ctx, MAX_BYTES, TOKEN, makeProxyFetch());
-
-    expect(mockFetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining("https://api.telegram.org/file/bot"),
-      }),
-    );
-  });
-
-  it("uses custom apiRoot for file download when apiRoot is set", async () => {
-    setupSuccessfulDownload();
-    const ctx = makeVideoStickerCtx();
-    const apiRoot = "http://custom.local:8081";
-
-    await resolveMedia(ctx, MAX_BYTES, TOKEN, makeProxyFetch(), apiRoot);
-
-    expect(mockFetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining(`${apiRoot}/file/bot`),
-      }),
-    );
-    expect(mockFetchRemoteMedia).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining("api.telegram.org"),
-      }),
-    );
-  });
-
-  it("strips trailing slashes from apiRoot before constructing file URL", async () => {
-    setupSuccessfulDownload();
-    const ctx = makeVideoStickerCtx();
-
-    await resolveMedia(ctx, MAX_BYTES, TOKEN, makeProxyFetch(), "http://custom.local:8081///");
-
-    expect(mockFetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining("http://custom.local:8081/file/bot"),
-      }),
-    );
-    // No double-slash artifacts from the stripped trailing slashes
-    const calledUrl: string = mockFetchRemoteMedia.mock.calls[0][0].url;
-    expect(calledUrl).not.toMatch(/\/\/\//);
   });
 });

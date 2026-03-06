@@ -5,8 +5,6 @@ import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runt
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
-import { resolveSenderTier } from "../security/heimdall/sender-tier.js";
-import type { SenderTier } from "../security/heimdall/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -45,6 +43,7 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import { isXaiProvider } from "./schema/clean-for-xai.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
@@ -67,6 +66,7 @@ function isOpenAIProvider(provider?: string) {
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
   voice: ["tts"],
 };
+const TOOL_DENY_FOR_XAI_PROVIDERS = new Set(["web_search"]);
 
 function normalizeMessageProvider(messageProvider?: string): string | undefined {
   const normalized = messageProvider?.trim().toLowerCase();
@@ -87,6 +87,18 @@ function applyMessageProviderToolPolicy(
   }
   const deniedSet = new Set(deniedTools);
   return tools.filter((tool) => !deniedSet.has(tool.name));
+}
+
+function applyModelProviderToolPolicy(
+  tools: AnyAgentTool[],
+  params?: { modelProvider?: string; modelId?: string },
+): AnyAgentTool[] {
+  if (!isXaiProvider(params?.modelProvider, params?.modelId)) {
+    return tools;
+  }
+  // xAI/Grok providers expose a native web_search tool; sending OpenClaw's
+  // web_search alongside it causes duplicate-name request failures.
+  return tools.filter((tool) => !TOOL_DENY_FOR_XAI_PROVIDERS.has(tool.name));
 }
 
 function isApplyPatchAllowedForModel(params: {
@@ -179,6 +191,7 @@ export const __testing = {
   patchToolSchemaForClaudeCompatibility,
   wrapToolParamNormalization,
   assertRequiredParams,
+  applyModelProviderToolPolicy,
 } as const;
 
 export function createOpenClawCodingTools(options?: {
@@ -190,6 +203,10 @@ export function createOpenClawCodingTools(options?: {
   messageThreadId?: string | number;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
+  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  sessionId?: string;
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
@@ -236,19 +253,8 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
-  /**
-   * Whether the sender is an owner (required for owner-only tools).
-   * DEPRECATED: Use `internal` flag instead for new code.
-   * This property overrides `internal` flag for backward compatibility (Task 2.3 will remove this).
-   */
+  /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
-  /**
-   * If true, this call originates from trusted internal runtime (cron, CLI, heartbeat).
-   * Maps to `isTrustedInternal` for Heimdall SYSTEM tier resolution.
-   * When true AND Heimdall enabled, results in SYSTEM tier (limited privileges).
-   * Currently overridden by senderIsOwner for backward compatibility.
-   */
-  internal?: boolean;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -372,14 +378,14 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceWriteTool(workspaceRoot);
+      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceEditTool(workspaceRoot);
+      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     return [tool];
@@ -506,34 +512,17 @@ export function createOpenClawCodingTools(options?: {
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
+      sessionId: options?.sessionId,
     }),
   ];
   const toolsForMessageProvider = applyMessageProviderToolPolicy(tools, options?.messageProvider);
+  const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
+    modelProvider: options?.modelProvider,
+    modelId: options?.modelId,
+  });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-
-  // Heimdall GATE: resolve sender tier for runtime tool ACL.
-  const heimdallCfg = options?.config?.agents?.defaults?.heimdall;
-  let senderTier: SenderTier | undefined;
-  if (heimdallCfg?.enabled) {
-    // If no senderId, infer from senderIsOwner (e.g. cron runs).
-    const effectiveSenderId = options?.senderId ?? (senderIsOwner ? "cron" : "unknown");
-
-    // Task 2.2: Map internal flag → isTrustedInternal for SYSTEM tier.
-    const isTrustedInternal = options?.internal === true;
-
-    senderTier = resolveSenderTier(
-      effectiveSenderId,
-      options?.senderUsername ?? undefined,
-      heimdallCfg,
-      undefined, // allowFrom (not applicable here)
-      isTrustedInternal,
-    );
-    // Task 2.3: OWNER override removed. Internal calls now use SYSTEM tier (least privilege).
-    // Legacy senderIsOwner still passed to applyOwnerOnlyToolPolicy for backward compat.
-  }
-
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForMessageProvider, senderIsOwner);
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
@@ -559,15 +548,18 @@ export function createOpenClawCodingTools(options?: {
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
   const normalized = subagentFiltered.map((tool) =>
-    normalizeToolParameters(tool, { modelProvider: options?.modelProvider }),
+    normalizeToolParameters(tool, {
+      modelProvider: options?.modelProvider,
+      modelId: options?.modelId,
+    }),
   );
   const withHooks = normalized.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       sessionKey: options?.sessionKey,
+      sessionId: options?.sessionId,
+      runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-      senderTier,
-      heimdallConfig: heimdallCfg,
     }),
   );
   const withAbort = options?.abortSignal

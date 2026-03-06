@@ -3,7 +3,26 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
+import {
+  isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
+  isBillingErrorMessage,
+  isOverloadedErrorMessage,
+  isPeriodicUsageLimitErrorMessage,
+  isRateLimitErrorMessage,
+  isTimeoutErrorMessage,
+  matchesFormatErrorPattern,
+} from "./failover-matches.js";
 import type { FailoverReason } from "./types.js";
+
+export {
+  isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
+  isBillingErrorMessage,
+  isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
+  isTimeoutErrorMessage,
+} from "./failover-matches.js";
 
 const log = createSubsystemLogger("errors");
 
@@ -47,6 +66,11 @@ function isReasoningConstraintErrorMessage(raw: string): boolean {
   );
 }
 
+function hasRateLimitTpmHint(raw: string): boolean {
+  const lower = raw.toLowerCase();
+  return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -54,7 +78,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   const lower = errorMessage.toLowerCase();
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+  if (hasRateLimitTpmHint(errorMessage)) {
     return false;
   }
 
@@ -82,6 +106,9 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     (lower.includes("max_tokens") && lower.includes("exceed") && lower.includes("context")) ||
     (lower.includes("input length") && lower.includes("exceed") && lower.includes("context")) ||
     (lower.includes("413") && lower.includes("too large")) ||
+    // Anthropic API and OpenAI-compatible providers (e.g. ZhipuAI/GLM) return this stop reason
+    // when the context window is exceeded. pi-ai surfaces it as "Unhandled stop reason: model_context_window_exceeded".
+    lower.includes("context_window_exceeded") ||
     // Chinese proxy error messages for context overflow
     errorMessage.includes("上下文过长") ||
     errorMessage.includes("上下文超出") ||
@@ -103,8 +130,7 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   }
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  const lower = errorMessage.toLowerCase();
-  if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+  if (hasRateLimitTpmHint(errorMessage)) {
     return false;
   }
 
@@ -159,10 +185,6 @@ const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
-const BILLING_ERROR_HEAD_RE =
-  /^(?:error[:\s-]+)?billing(?:\s+error)?(?:[:\s-]+|$)|^(?:error[:\s-]+)?(?:credit balance|insufficient credits?|payment required|http\s*402\b)/i;
-const BILLING_ERROR_HARD_402_RE =
-  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|^\s*402\s+payment/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
@@ -228,6 +250,66 @@ export function isTransientHttpError(raw: string): boolean {
     return false;
   }
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
+}
+
+export function classifyFailoverReasonFromHttpStatus(
+  status: number | undefined,
+  message?: string,
+): FailoverReason | null {
+  if (typeof status !== "number" || !Number.isFinite(status)) {
+    return null;
+  }
+
+  if (status === 402) {
+    // Some providers (e.g. Anthropic Claude Max plan) surface temporary
+    // usage/rate-limit failures as HTTP 402. Use a narrow matcher for
+    // temporary limits to avoid misclassifying billing failures (#30484).
+    if (message) {
+      const lower = message.toLowerCase();
+      // Temporary usage limit signals: retry language + usage/limit terminology
+      const hasTemporarySignal =
+        (lower.includes("try again") ||
+          lower.includes("retry") ||
+          lower.includes("temporary") ||
+          lower.includes("cooldown")) &&
+        (lower.includes("usage limit") ||
+          lower.includes("rate limit") ||
+          lower.includes("organization usage"));
+      if (hasTemporarySignal) {
+        return "rate_limit";
+      }
+    }
+    return "billing";
+  }
+  if (status === 429) {
+    return "rate_limit";
+  }
+  if (status === 401 || status === 403) {
+    if (message && isAuthPermanentErrorMessage(message)) {
+      return "auth_permanent";
+    }
+    return "auth";
+  }
+  if (status === 408) {
+    return "timeout";
+  }
+  // Keep the status-only path conservative and behavior-preserving.
+  // Message-path HTTP heuristics are broader and should not leak in here.
+  if (status === 502 || status === 503 || status === 504) {
+    return "timeout";
+  }
+  if (status === 529) {
+    return "rate_limit";
+  }
+  if (status === 400) {
+    // Some providers return quota/balance errors under HTTP 400, so do not
+    // let the generic format fallback mask an explicit billing signal.
+    if (message && isBillingErrorMessage(message)) {
+      return "billing";
+    }
+    return "format";
+  }
+  return null;
 }
 
 function stripFinalTagsFromText(text: string): string {
@@ -429,21 +511,6 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   };
 }
 
-/**
- * Strip model identifiers from user-facing text to avoid leaking internal model names.
- * Matches patterns like "for model gemini-3-flash", "model: gpt-5.2", provider/model paths.
- */
-const MODEL_ID_PATTERN =
-  /(?<=\bfor model\s)[\w./-]+|(?<=\bmodel[:\s]["']?)[\w./-]+(?=["']?\s|["']?$)/gi;
-const PROVIDER_MODEL_PATH_PATTERN = /\b[a-z][\w-]*\/[a-z][\w.*/-]+/gi;
-
-export function redactModelIdentifiers(text: string): string {
-  if (!text) {
-    return text;
-  }
-  return text.replace(MODEL_ID_PATTERN, "***").replace(PROVIDER_MODEL_PATH_PATTERN, "***");
-}
-
 export function formatRawAssistantErrorForUi(raw?: string): string {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {
@@ -459,7 +526,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   if (httpMatch) {
     const rest = httpMatch[2].trim();
     if (!rest.startsWith("{")) {
-      return redactModelIdentifiers(`HTTP ${httpMatch[1]}: ${rest}`);
+      return `HTTP ${httpMatch[1]}: ${rest}`;
     }
   }
 
@@ -468,21 +535,15 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
     const type = info.type ? ` ${info.type}` : "";
     const requestId = info.requestId ? ` (request_id: ${info.requestId})` : "";
-    return redactModelIdentifiers(`${prefix}${type}: ${info.message}${requestId}`);
+    return `${prefix}${type}: ${info.message}${requestId}`;
   }
 
-  const result = trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
-  return redactModelIdentifiers(result);
+  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
 }
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: {
-    cfg?: OpenClawConfig;
-    sessionKey?: string;
-    provider?: string;
-    model?: string;
-  },
+  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -543,7 +604,7 @@ export function formatAssistantErrorText(
 
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
-    return redactModelIdentifiers(`LLM request rejected: ${invalidRequest[1]}`);
+    return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
@@ -567,8 +628,7 @@ export function formatAssistantErrorText(
   if (raw.length > 600) {
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
-  const truncated = raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
-  return redactModelIdentifiers(truncated);
+  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
 export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
@@ -632,95 +692,6 @@ export function isRateLimitAssistantError(msg: AssistantMessage | undefined): bo
   return isRateLimitErrorMessage(msg.errorMessage ?? "");
 }
 
-type ErrorPattern = RegExp | string;
-
-const ERROR_PATTERNS = {
-  rateLimit: [
-    /rate[_ ]limit|too many requests|429/,
-    "model_cooldown",
-    "cooling down",
-    "exceeded your current quota",
-    "resource has been exhausted",
-    "quota exceeded",
-    "resource_exhausted",
-    "usage limit",
-    "model_cooldown",
-    "cooling down",
-    "tpm",
-    "tokens per minute",
-    "model_cooldown",
-    "cooling down",
-  ],
-  overloaded: [
-    /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
-    "overloaded",
-    "service unavailable",
-    "high demand",
-  ],
-  timeout: [
-    "timeout",
-    "timed out",
-    "deadline exceeded",
-    "context deadline exceeded",
-    /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*abort\b/i,
-    /\breason:\s*abort\b/i,
-    /\bunhandled stop reason:\s*abort\b/i,
-    /\bfetch failed\b/i,
-    "network error",
-    "socket hang up",
-    "stream disconnect",
-    /\bconnect(?:ion)?\s+refused\b/i,
-  ],
-  billing: [
-    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
-    "payment required",
-    "insufficient credits",
-    "credit balance",
-    "plans & billing",
-    "insufficient balance",
-  ],
-  authPermanent: [
-    /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
-    "invalid_api_key",
-    "key has been disabled",
-    "key has been revoked",
-    "account has been deactivated",
-    /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
-  ],
-  auth: [
-    /invalid[_ ]?api[_ ]?key/,
-    "incorrect api key",
-    "invalid token",
-    "authentication",
-    "re-authenticate",
-    "oauth token refresh failed",
-    "unauthorized",
-    "forbidden",
-    "access denied",
-    "insufficient permissions",
-    "insufficient permission",
-    /missing scopes?:/i,
-    "expired",
-    "token has expired",
-    /\b401\b/,
-    /\b403\b/,
-    "no credentials found",
-    "no api key found",
-    /\bauth[_ ]unavailable\b/i,
-    "no auth available",
-  ],
-  format: [
-    "string should match pattern",
-    "tool_use.id",
-    "tool_use_id",
-    "messages.1.content.1.tool_use.id",
-    "invalid request format",
-    /tool call id was.*must be/i,
-    "invalid argument",
-  ],
-} as const;
-
 const TOOL_CALL_INPUT_MISSING_RE =
   /tool_(?:use|call)\.(?:input|arguments).*?(?:field required|required)/i;
 const TOOL_CALL_INPUT_PATH_RE =
@@ -730,58 +701,6 @@ const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
-
-function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): boolean {
-  if (!raw) {
-    return false;
-  }
-  const value = raw.toLowerCase();
-  return patterns.some((pattern) =>
-    pattern instanceof RegExp ? pattern.test(value) : value.includes(pattern),
-  );
-}
-
-export function isRateLimitErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.rateLimit);
-}
-
-export function isTimeoutErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
-}
-
-/**
- * Maximum character length for a string to be considered a billing error message.
- * Real API billing errors are short, structured messages (typically under 300 chars).
- * Longer text is almost certainly assistant content that happens to mention billing keywords.
- */
-const BILLING_ERROR_MAX_LENGTH = 512;
-
-export function isBillingErrorMessage(raw: string): boolean {
-  const value = raw.toLowerCase();
-  if (!value) {
-    return false;
-  }
-  // Real billing error messages from APIs are short structured payloads.
-  // Long text (e.g. multi-paragraph assistant responses) that happens to mention
-  // "billing", "payment", etc. should not be treated as a billing error.
-  if (raw.length > BILLING_ERROR_MAX_LENGTH) {
-    // Keep explicit status/code 402 detection for providers that wrap errors in
-    // larger payloads (for example nested JSON bodies or prefixed metadata).
-    return BILLING_ERROR_HARD_402_RE.test(value);
-  }
-  if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
-    return true;
-  }
-  if (!BILLING_ERROR_HEAD_RE.test(raw)) {
-    return false;
-  }
-  return (
-    value.includes("upgrade") ||
-    value.includes("credits") ||
-    value.includes("payment") ||
-    value.includes("plan")
-  );
-}
 
 export function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {
@@ -795,18 +714,6 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
     return false;
   }
   return isBillingErrorMessage(msg.errorMessage ?? "");
-}
-
-export function isAuthPermanentErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.authPermanent);
-}
-
-export function isAuthErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
-}
-
-export function isOverloadedErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
 }
 
 function isJsonApiInternalServerError(raw: string): boolean {
@@ -872,7 +779,7 @@ export function isImageSizeError(errorMessage?: string): boolean {
 }
 
 export function isCloudCodeAssistFormatError(raw: string): boolean {
-  return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
+  return !isImageDimensionErrorMessage(raw) && matchesFormatErrorPattern(raw);
 }
 
 export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
@@ -913,90 +820,37 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   return false;
 }
 
-/**
- * Map of gRPC status strings to HTTP status codes.
- * Used to classify JSON-wrapped errors from providers like Google/Gemini
- * that return gRPC-style status codes in their error payloads.
- */
-const GRPC_STATUS_TO_HTTP: Record<string, number> = {
-  UNAVAILABLE: 503,
-  INTERNAL: 500,
-  RESOURCE_EXHAUSTED: 429,
-  PERMISSION_DENIED: 403,
-  UNAUTHENTICATED: 401,
-  DEADLINE_EXCEEDED: 408,
-};
-
-/**
- * Map of OpenAI-compatible string error codes/types to HTTP status codes.
- * Used by CLIProxyAPI and other OpenAI-compatible APIs that return string
- * codes like "internal_server_error" or type fields like "server_error".
- */
-const OPENAI_STRING_CODE_TO_HTTP: Record<string, number> = {
-  server_error: 500,
-  internal_server_error: 500,
-  api_error: 500,
-  rate_limit_error: 429,
-  rate_limit_exceeded: 429,
-  insufficient_quota: 402,
-  authentication_error: 401,
-  permission_error: 403,
-  invalid_request_error: 400,
-  not_found_error: 404,
-};
-
-/**
- * Try to extract a numeric HTTP status code from a JSON-wrapped error payload.
- * Handles formats like:
- *   {"error":{"code":503,"message":"...","status":"UNAVAILABLE"}}
- *   {"error":{"code":"internal_server_error","type":"server_error"}}
- *   {"code":429,"message":"..."}
- * Returns null if the string is not JSON or contains no recognizable status code.
- */
-function tryExtractNumericHttpCode(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith("{")) {
-    return null;
+function isCliSessionExpiredErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
   }
-  try {
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    const errorObj = parsed?.error as Record<string, unknown> | undefined;
-    const code = errorObj?.code ?? parsed?.code;
-    if (typeof code === "number" && code >= 400 && code < 600) {
-      return code;
-    }
-    if (typeof code === "string") {
-      const trimmedCode = code.trim();
-      if (/^\d{3}$/.test(trimmedCode)) {
-        const numCode = Number(trimmedCode);
-        if (numCode >= 400 && numCode < 600) {
-          return numCode;
-        }
-      }
-      // OpenAI-compatible string codes: "internal_server_error", "rate_limit_error", etc.
-      const mapped = OPENAI_STRING_CODE_TO_HTTP[trimmedCode.toLowerCase()];
-      if (mapped) {
-        return mapped;
-      }
-    }
-    // gRPC status strings: "UNAVAILABLE", "RESOURCE_EXHAUSTED", etc.
-    const status = errorObj?.status ?? parsed?.status;
-    if (typeof status === "string") {
-      return GRPC_STATUS_TO_HTTP[status.toUpperCase()] ?? null;
-    }
-    // OpenAI-compatible type field: "server_error", "rate_limit_error", etc.
-    const type = errorObj?.type ?? parsed?.type;
-    if (typeof type === "string") {
-      return OPENAI_STRING_CODE_TO_HTTP[type.trim().toLowerCase()] ?? null;
-    }
-  } catch {
-    // Not valid JSON — fall through
-  }
-  return null;
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("session not found") ||
+    lower.includes("session does not exist") ||
+    lower.includes("session expired") ||
+    lower.includes("session invalid") ||
+    lower.includes("conversation not found") ||
+    lower.includes("conversation does not exist") ||
+    lower.includes("conversation expired") ||
+    lower.includes("conversation invalid") ||
+    lower.includes("no such session") ||
+    lower.includes("invalid session") ||
+    lower.includes("session id not found") ||
+    lower.includes("conversation id not found")
+  );
 }
 
-/** Core text-based classification — no JSON unwrapping. */
-function classifyFailoverReasonFromText(raw: string): FailoverReason | null {
+export function classifyFailoverReason(raw: string): FailoverReason | null {
+  if (isImageDimensionErrorMessage(raw)) {
+    return null;
+  }
+  if (isImageSizeError(raw)) {
+    return null;
+  }
+  if (isCliSessionExpiredErrorMessage(raw)) {
+    return "session_expired";
+  }
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
   }
@@ -1006,6 +860,9 @@ function classifyFailoverReasonFromText(raw: string): FailoverReason | null {
   }
   if (isJsonApiInternalServerError(raw)) {
     return "timeout";
+  }
+  if (isPeriodicUsageLimitErrorMessage(raw)) {
+    return isBillingErrorMessage(raw) ? "billing" : "rate_limit";
   }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
@@ -1028,49 +885,6 @@ function classifyFailoverReasonFromText(raw: string): FailoverReason | null {
   if (isAuthErrorMessage(raw)) {
     return "auth";
   }
-  return null;
-}
-
-export function classifyFailoverReason(raw: string): FailoverReason | null {
-  if (isImageDimensionErrorMessage(raw)) {
-    return null;
-  }
-  if (isImageSizeError(raw)) {
-    return null;
-  }
-
-  // First pass: try text-based classification on the raw string.
-  const textResult = classifyFailoverReasonFromText(raw);
-  if (textResult) {
-    return textResult;
-  }
-
-  // Second pass: if raw looks like a JSON error payload, try to classify by
-  // embedded HTTP/gRPC status code and by the inner message text.
-  const numericCode = tryExtractNumericHttpCode(raw);
-  if (numericCode) {
-    if (TRANSIENT_HTTP_ERROR_CODES.has(numericCode)) {
-      return "timeout";
-    }
-    if (numericCode === 429) {
-      return "rate_limit";
-    }
-    if (numericCode === 401 || numericCode === 403) {
-      return "auth";
-    }
-    if (numericCode === 402) {
-      return "billing";
-    }
-    if (numericCode === 408) {
-      return "timeout";
-    }
-  }
-
-  const apiInfo = parseApiErrorInfo(raw);
-  if (apiInfo?.message) {
-    return classifyFailoverReasonFromText(apiInfo.message);
-  }
-
   return null;
 }
 

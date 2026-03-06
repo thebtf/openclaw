@@ -1,4 +1,8 @@
 import type { Bot } from "grammy";
+import {
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "../acp/persistent-bindings.route.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -30,11 +34,28 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
-import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
+import type {
+  DmPolicy,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import {
+  buildAgentSessionKey,
+  pickFirstExistingAgentId,
+  resolveAgentRoute,
+  type ResolvedAgentRoute,
+} from "../routing/resolve-route.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  buildAgentMainSessionKey,
+  resolveAgentIdFromSessionKey,
+  resolveThreadSessionKeys,
+} from "../routing/session-key.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
@@ -46,6 +67,7 @@ import {
   buildGroupLabel,
   buildSenderLabel,
   buildSenderName,
+  resolveTelegramDirectPeerId,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
@@ -60,7 +82,7 @@ import {
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
-import { resolveForumTopicName } from "./forum-topic-cache.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
@@ -88,7 +110,10 @@ type TelegramLogger = {
 type ResolveTelegramGroupConfig = (
   chatId: string | number,
   messageThreadId?: number,
-) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+) => {
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+};
 
 type ResolveGroupActivation = (params: {
   chatId: string | number;
@@ -113,31 +138,13 @@ export type BuildTelegramMessageContextParams = {
   dmPolicy: DmPolicy;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
-  ackReactionScope: "off" | "group-mentions" | "group-all" | "direct" | "all";
+  ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
   logger: TelegramLogger;
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
   /** Global (per-account) handler for sendChatAction 401 backoff (#27092). */
   sendChatActionHandler: import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;
-  /**
-   * When true, bypasses the mention gate so a prefilter-approved message can
-   * proceed to full context construction even without an @mention.
-   */
-  bypassMentionGate?: boolean;
-};
-
-/**
- * Returned by buildTelegramMessageContext when a group message was stopped by
- * the mention gate (requireMention: true, no @mention, no reply-to-bot) but a
- * prefilter hook should have the chance to override the drop decision.
- *
- * Handlers should fire a message:prefilter hook with `data`, then re-call
- * buildTelegramMessageContext with `bypassMentionGate: true` if approved.
- */
-export type MentionGateSkipped = {
-  readonly mentionGateSkipped: true;
-  readonly data: import("../hooks/internal-hooks.js").MessagePrefilterHookContext;
 };
 
 async function resolveStickerVisionSupport(params: {
@@ -180,11 +187,11 @@ export const buildTelegramMessageContext = async ({
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
   sendChatActionHandler,
-  bypassMentionGate,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+  const senderId = msg.from?.id ? String(msg.from.id) : "";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
   const threadSpec = resolveTelegramThreadSpec({
@@ -194,12 +201,22 @@ export const buildTelegramMessageContext = async ({
   });
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
-  const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
-  const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+  const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+  const threadIdForConfig = resolvedThreadId ?? dmThreadId;
+  const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig);
+  // Use direct config dmPolicy override if available for DMs
+  const effectiveDmPolicy =
+    !isGroup && groupConfig && "dmPolicy" in groupConfig
+      ? (groupConfig.dmPolicy ?? dmPolicy)
+      : dmPolicy;
+  const peerId = isGroup
+    ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
+    : resolveTelegramDirectPeerId({ chatId, senderId });
   const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
-  const route = resolveAgentRoute({
-    cfg: loadConfig(),
+  const freshCfg = loadConfig();
+  let route: ResolvedAgentRoute = resolveAgentRoute({
+    cfg: freshCfg,
     channel: "telegram",
     accountId: account.accountId,
     peer: {
@@ -208,21 +225,96 @@ export const buildTelegramMessageContext = async ({
     },
     parentPeer,
   });
-  const baseSessionKey = route.sessionKey;
-  // DMs: use raw messageThreadId for thread sessions (not forum topic ids)
-  const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-  const threadKeys =
-    dmThreadId != null
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
-      : null;
-  const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
-  const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeDmAllowFromWithStore({ allowFrom, storeAllowFrom, dmPolicy });
+  // Per-topic agentId override: re-derive session key under the topic's agent.
+  const rawTopicAgentId = topicConfig?.agentId?.trim();
+  if (rawTopicAgentId) {
+    // Validate agentId against configured agents; falls back to default if not found.
+    const topicAgentId = pickFirstExistingAgentId(freshCfg, rawTopicAgentId);
+    const overrideSessionKey = buildAgentSessionKey({
+      agentId: topicAgentId,
+      channel: "telegram",
+      accountId: account.accountId,
+      peer: { kind: isGroup ? "group" : "direct", id: peerId },
+      dmScope: freshCfg.session?.dmScope,
+      identityLinks: freshCfg.session?.identityLinks,
+    }).toLowerCase();
+    const overrideMainSessionKey = buildAgentMainSessionKey({
+      agentId: topicAgentId,
+    }).toLowerCase();
+    route = {
+      ...route,
+      agentId: topicAgentId,
+      sessionKey: overrideSessionKey,
+      mainSessionKey: overrideMainSessionKey,
+    };
+    logVerbose(
+      `telegram: per-topic agent override: topic=${resolvedThreadId ?? dmThreadId} agent=${topicAgentId} sessionKey=${overrideSessionKey}`,
+    );
+  }
+  const configuredRoute = resolveConfiguredAcpRoute({
+    cfg: freshCfg,
+    route,
+    channel: "telegram",
+    accountId: account.accountId,
+    conversationId: peerId,
+    parentConversationId: isGroup ? String(chatId) : undefined,
+  });
+  let configuredBinding = configuredRoute.configuredBinding;
+  let configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
+  route = configuredRoute.route;
+  const threadBindingConversationId =
+    replyThreadId != null
+      ? `${chatId}:topic:${replyThreadId}`
+      : !isGroup
+        ? String(chatId)
+        : undefined;
+  if (threadBindingConversationId) {
+    const threadBinding = getSessionBindingService().resolveByConversation({
+      channel: "telegram",
+      accountId: account.accountId,
+      conversationId: threadBindingConversationId,
+    });
+    const boundSessionKey = threadBinding?.targetSessionKey?.trim();
+    if (threadBinding && boundSessionKey) {
+      route = {
+        ...route,
+        sessionKey: boundSessionKey,
+        agentId: resolveAgentIdFromSessionKey(boundSessionKey),
+        matchedBy: "binding.channel",
+      };
+      configuredBinding = null;
+      configuredBindingSessionKey = "";
+      getSessionBindingService().touch(threadBinding.bindingId);
+      logVerbose(
+        `telegram: routed via bound conversation ${threadBindingConversationId} -> ${boundSessionKey}`,
+      );
+    }
+  }
+  const requiresExplicitAccountBinding = (candidate: ResolvedAgentRoute): boolean =>
+    candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
+  // Fail closed for named Telegram accounts when route resolution falls back to
+  // default-agent routing. This prevents cross-account DM/session contamination.
+  if (requiresExplicitAccountBinding(route)) {
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: "non-default account requires explicit binding",
+      target: route.accountId,
+    });
+    return null;
+  }
+  // Calculate groupAllowOverride first - it's needed for both DM and group allowlist checks
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+  // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
+  const dmAllowFrom = groupAllowOverride ?? allowFrom;
+  const effectiveDmAllow = normalizeDmAllowFromWithStore({
+    allowFrom: dmAllowFrom,
+    storeAllowFrom,
+    dmPolicy: effectiveDmPolicy,
+  });
   // Group sender checks are explicit and must not inherit DM pairing-store entries.
   const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? groupAllowFrom);
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
-  const senderId = msg.from?.id ? String(msg.from.id) : "";
   const senderUsername = msg.from?.username ?? "";
   const baseAccess = evaluateTelegramGroupBaseAccess({
     isGroup,
@@ -246,24 +338,20 @@ export const buildTelegramMessageContext = async ({
       );
       return null;
     }
-    logVerbose(`Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`);
+    logVerbose(
+      isGroup
+        ? `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`
+        : `Blocked telegram DM sender ${senderId || "unknown"} (DM allowFrom override)`,
+    );
     return null;
   }
 
-  // Compute requireMention early for preflight transcription gating
-  const activationOverride = resolveGroupActivation({
-    chatId,
-    messageThreadId: resolvedThreadId,
-    sessionKey: sessionKey,
-    agentId: route.agentId,
-  });
-  const baseRequireMention = resolveGroupRequireMention(chatId);
-  const requireMention = firstDefined(
-    activationOverride,
-    topicConfig?.requireMention,
-    groupConfig?.requireMention,
-    baseRequireMention,
-  );
+  const requireTopic = (groupConfig as TelegramDirectConfig | undefined)?.requireTopic;
+  const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
+  if (topicRequiredButMissing) {
+    logVerbose(`Blocked telegram DM ${chatId}: requireTopic=true but no topic present`);
+    return null;
+  }
 
   const sendTyping = async () => {
     await withTelegramApiErrorLogging({
@@ -296,7 +384,7 @@ export const buildTelegramMessageContext = async ({
   if (
     !(await enforceTelegramDmAccess({
       isGroup,
-      dmPolicy,
+      dmPolicy: effectiveDmPolicy,
       msg,
       chatId,
       effectiveDmAllow,
@@ -307,6 +395,54 @@ export const buildTelegramMessageContext = async ({
   ) {
     return null;
   }
+  const ensureConfiguredBindingReady = async (): Promise<boolean> => {
+    if (!configuredBinding) {
+      return true;
+    }
+    const ensured = await ensureConfiguredAcpRouteReady({
+      cfg: freshCfg,
+      configuredBinding,
+    });
+    if (ensured.ok) {
+      logVerbose(
+        `telegram: using configured ACP binding for ${configuredBinding.spec.conversationId} -> ${configuredBindingSessionKey}`,
+      );
+      return true;
+    }
+    logVerbose(
+      `telegram: configured ACP binding unavailable for ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+    );
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: "configured ACP binding unavailable",
+      target: configuredBinding.spec.conversationId,
+    });
+    return false;
+  };
+
+  const baseSessionKey = route.sessionKey;
+  // DMs: use thread suffix for session isolation (works regardless of dmScope)
+  const threadKeys =
+    dmThreadId != null
+      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
+      : null;
+  const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+  const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
+  // Compute requireMention after access checks and final route selection.
+  const activationOverride = resolveGroupActivation({
+    chatId,
+    messageThreadId: resolvedThreadId,
+    sessionKey: sessionKey,
+    agentId: route.agentId,
+  });
+  const baseRequireMention = resolveGroupRequireMention(chatId);
+  const requireMention = firstDefined(
+    activationOverride,
+    topicConfig?.requireMention,
+    (groupConfig as TelegramGroupConfig | undefined)?.requireMention,
+    baseRequireMention,
+  );
 
   recordChannelActivity({
     channel: "telegram",
@@ -366,11 +502,22 @@ export const buildTelegramMessageContext = async ({
   let bodyText = rawBody;
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
 
+  const disableAudioPreflight =
+    firstDefined(
+      topicConfig?.disableAudioPreflight,
+      (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight,
+    ) === true;
+
   // Preflight audio transcription for mention detection in groups
   // This allows voice notes to be checked for mentions before being dropped
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
-    isGroup && requireMention && hasAudio && !hasUserText && mentionRegexes.length > 0;
+    isGroup &&
+    requireMention &&
+    hasAudio &&
+    !hasUserText &&
+    mentionRegexes.length > 0 &&
+    !disableAudioPreflight;
 
   if (needsPreflightTranscription) {
     try {
@@ -433,9 +580,18 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
   // Reply-chain detection: replying to a bot message acts like an implicit mention.
+  // Exclude forum-topic service messages (auto-generated "Topic created" etc. messages
+  // by the bot) so that every message inside a bot-created topic does not incorrectly
+  // bypass requireMention (#32256).
+  // We detect service messages by the presence of Telegram's forum_topic_* fields
+  // rather than by the absence of text/caption, because legitimate bot media messages
+  // (stickers, voice notes, captionless photos) also lack text/caption.
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
-  const implicitMention = botId != null && replyFromId === botId;
+  const replyToBotMessage = botId != null && replyFromId === botId;
+  const isReplyToServiceMessage =
+    replyToBotMessage && isTelegramForumServiceMessage(msg.reply_to_message);
+  const implicitMention = replyToBotMessage && !isReplyToServiceMessage;
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
   const mentionGate = resolveMentionGatingWithBypass({
     isGroup,
@@ -449,7 +605,7 @@ export const buildTelegramMessageContext = async ({
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-  if (isGroup && requireMention && canDetectMention && !bypassMentionGate) {
+  if (isGroup && requireMention && canDetectMention) {
     if (mentionGate.shouldSkip) {
       logger.info({ chatId, reason: "no-mention" }, "skipping group message");
       recordPendingHistoryEntryIfEnabled({
@@ -465,18 +621,12 @@ export const buildTelegramMessageContext = async ({
             }
           : null,
       });
-      return {
-        mentionGateSkipped: true,
-        data: {
-          accountId: account.accountId,
-          channel: "telegram",
-          chatId: String(chatId),
-          messageId: typeof msg.message_id === "number" ? String(msg.message_id) : "",
-          text: rawBody,
-          senderId: senderId || undefined,
-        },
-      } satisfies MentionGateSkipped;
+      return null;
     }
+  }
+
+  if (!(await ensureConfiguredBindingReady())) {
+    return null;
   }
 
   // ACK reactions
@@ -487,7 +637,6 @@ export const buildTelegramMessageContext = async ({
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldAckReaction = () =>
     Boolean(
-      !isForum &&
       ackReaction &&
       shouldAckReactionGate({
         scope: ackReactionScope,
@@ -587,38 +736,6 @@ export const buildTelegramMessageContext = async ({
             return false;
           },
         )
-      : null;
-
-  // Deferred forum reaction: react to the first outgoing message instead of the user's incoming
-  // message. In forum topics, reacting to the incoming message causes Telegram to re-render the
-  // thread header slot (visible flicker). Reacting to our own outgoing message avoids this.
-  let deferredForumReactionFired = false;
-  const deferredForumReaction: ((outMsgId: number) => void) | null =
-    isForum &&
-    ackReaction &&
-    reactionApi &&
-    shouldAckReactionGate({
-      scope: ackReactionScope,
-      isDirect: !isGroup,
-      isGroup,
-      isMentionableGroup: isGroup,
-      requireMention: Boolean(requireMention),
-      canDetectMention,
-      effectiveWasMentioned,
-      shouldBypassMention: mentionGate.shouldBypassMention,
-    })
-      ? (outMsgId: number): void => {
-          if (deferredForumReactionFired) {
-            return;
-          }
-          deferredForumReactionFired = true;
-          void withTelegramApiErrorLogging({
-            operation: "setMessageReaction",
-            fn: () => reactionApi(chatId, outMsgId, [{ type: "emoji", emoji: ackReaction }]),
-          }).catch((err) => {
-            logVerbose(`telegram forum deferred-react failed for chat ${chatId}: ${String(err)}`);
-          });
-        }
       : null;
 
   const replyTarget = describeReplyTarget(msg);
@@ -721,7 +838,7 @@ export const buildTelegramMessageContext = async ({
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
-    GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
+    GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
     SenderName: senderName,
     SenderId: senderId || undefined,
     SenderUsername: senderUsername || undefined,
@@ -768,17 +885,19 @@ export const buildTelegramMessageContext = async ({
     CommandAuthorized: commandAuthorized,
     // For groups: use resolved forum topic id; for DMs: use raw messageThreadId
     MessageThreadId: threadSpec.id,
-    // ThreadLabel: human-readable topic name when cached, otherwise numeric id.
-    // Name is populated by the forum_topic_created service message interceptor in bot-handlers.ts.
-    ThreadLabel:
-      threadSpec.id != null
-        ? (resolveForumTopicName(chatId, threadSpec.id) ?? String(threadSpec.id))
-        : undefined,
     IsForum: isForum,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,
     OriginatingTo: `telegram:${chatId}`,
   });
+
+  const pinnedMainDmOwner = !isGroup
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: cfg.session?.dmScope,
+        allowFrom: dmAllowFrom,
+        normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
+      })
+    : null;
 
   await recordInboundSession({
     storePath,
@@ -792,6 +911,18 @@ export const buildTelegramMessageContext = async ({
           accountId: route.accountId,
           // Preserve DM topic threadId for replies (fixes #8891)
           threadId: dmThreadId != null ? String(dmThreadId) : undefined,
+          mainDmOwnerPin:
+            pinnedMainDmOwner && senderId
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: senderId,
+                  onSkip: ({ ownerRecipient, senderRecipient }) => {
+                    logVerbose(
+                      `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
         }
       : undefined,
     onRecordError: (err) => {
@@ -842,12 +973,10 @@ export const buildTelegramMessageContext = async ({
     reactionApi,
     removeAckAfterReply,
     statusReactionController,
-    deferredForumReaction,
     accountId: account.accountId,
   };
 };
 
-export type TelegramMessageContext = Exclude<
-  NonNullable<Awaited<ReturnType<typeof buildTelegramMessageContext>>>,
-  MentionGateSkipped
+export type TelegramMessageContext = NonNullable<
+  Awaited<ReturnType<typeof buildTelegramMessageContext>>
 >;

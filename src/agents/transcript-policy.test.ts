@@ -44,33 +44,14 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBeUndefined();
   });
 
-  it("enables repairToolUseResultPairing for direct MiniMax provider", () => {
+  it("enables strict tool call id sanitization for openai-completions APIs", () => {
     const policy = resolveTranscriptPolicy({
-      provider: "minimax",
-      modelId: "MiniMax-M2.5",
-      modelApi: "anthropic-messages",
+      provider: "openai",
+      modelId: "gpt-5.2",
+      modelApi: "openai-completions",
     });
-    expect(policy.repairToolUseResultPairing).toBe(true);
-    expect(policy.allowSyntheticToolResults).toBe(true);
-  });
-
-  it("enables repairToolUseResultPairing for MiniMax model behind a proxy", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "unleashed-openai",
-      modelId: "minimax-m2.5-free",
-      modelApi: "openai-responses",
-    });
-    expect(policy.repairToolUseResultPairing).toBe(true);
-    expect(policy.allowSyntheticToolResults).toBe(true);
-  });
-
-  it("enables repairToolUseResultPairing for MiniMax-CN provider", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "minimax-cn",
-      modelId: "MiniMax-M2.5",
-    });
-    expect(policy.repairToolUseResultPairing).toBe(true);
-    expect(policy.allowSyntheticToolResults).toBe(true);
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
   });
 
   it("enables user-turn merge for strict OpenAI-compatible providers", () => {
@@ -95,6 +76,50 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.sanitizeMode).toBe("full");
   });
 
+  it("preserves thinking signatures for Anthropic provider (#32526)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "anthropic",
+      modelId: "claude-opus-4-5",
+      modelApi: "anthropic-messages",
+    });
+    expect(policy.preserveSignatures).toBe(true);
+  });
+
+  it("preserves thinking signatures for Bedrock Anthropic (#32526)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream",
+    });
+    expect(policy.preserveSignatures).toBe(true);
+  });
+
+  it("does not preserve signatures for Google provider (#32526)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "google",
+      modelId: "gemini-2.0-flash",
+      modelApi: "google-generative-ai",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
+  it("does not preserve signatures for OpenAI provider (#32526)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
+  it("does not preserve signatures for Mistral provider (#32526)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
   it("keeps OpenRouter on its existing turn-validation path", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",
@@ -102,34 +127,5 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "openai-completions",
     });
     expect(policy.validateAnthropicTurns).toBe(false);
-  });
-
-  it("enables repairToolUseResultPairing for direct MiniMax provider", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "minimax",
-      modelId: "MiniMax-M2.5",
-      modelApi: "anthropic-messages",
-    });
-    expect(policy.repairToolUseResultPairing).toBe(true);
-    expect(policy.allowSyntheticToolResults).toBe(true);
-  });
-
-  it("enables repairToolUseResultPairing for MiniMax model behind a proxy", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "unleashed-openai",
-      modelId: "minimax-m2.5-free",
-      modelApi: "openai-responses",
-    });
-    expect(policy.repairToolUseResultPairing).toBe(true);
-    expect(policy.allowSyntheticToolResults).toBe(true);
-  });
-
-  it("enables repairToolUseResultPairing for MiniMax-CN provider", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "minimax-cn",
-      modelId: "MiniMax-M2.5",
-    });
-    expect(policy.repairToolUseResultPairing).toBe(true);
-    expect(policy.allowSyntheticToolResults).toBe(true);
   });
 });

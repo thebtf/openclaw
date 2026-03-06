@@ -8,13 +8,6 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
-import type {
-  AgentSummary,
-  SessionInfo,
-  SessionScope,
-  TuiOptions,
-  TuiStateAccess,
-} from "./tui-types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -34,6 +27,13 @@ import { formatTokens } from "./tui-formatters.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import type {
+  AgentSummary,
+  SessionInfo,
+  SessionScope,
+  TuiOptions,
+  TuiStateAccess,
+} from "./tui-types.js";
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
@@ -203,9 +203,9 @@ export function resolveTuiSessionKey(params: {
     return trimmed;
   }
   if (trimmed.startsWith("agent:")) {
-    return trimmed;
+    return trimmed.toLowerCase();
   }
-  return `agent:${params.currentAgentId}:${trimmed}`;
+  return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {
@@ -244,6 +244,30 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
     lastBackspaceAt = ts;
     return data;
   };
+}
+
+export function isIgnorableTuiStopError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const err = error as { code?: unknown; syscall?: unknown; message?: unknown };
+  const code = typeof err.code === "string" ? err.code : "";
+  const syscall = typeof err.syscall === "string" ? err.syscall : "";
+  const message = typeof err.message === "string" ? err.message : "";
+  if (code === "EBADF" && syscall === "setRawMode") {
+    return true;
+  }
+  return /setRawMode/i.test(message) && /EBADF/i.test(message);
+}
+
+export function stopTuiSafely(stop: () => void): void {
+  try {
+    stop();
+  } catch (error) {
+    if (!isIgnorableTuiStopError(error)) {
+      throw error;
+    }
+  }
 }
 
 type CtrlCAction = "clear" | "warn" | "exit";
@@ -447,7 +471,7 @@ export async function runTui(opts: TuiOptions) {
     localRunIds.clear();
   };
 
-  const client = new GatewayChatClient({
+  const client = await GatewayChatClient.connect({
     url: opts.url,
     token: opts.token,
     password: opts.password,
@@ -770,7 +794,7 @@ export async function runTui(opts: TuiOptions) {
     }
     exitRequested = true;
     client.stop();
-    tui.stop();
+    stopTuiSafely(() => tui.stop());
     process.exit(0);
   };
 

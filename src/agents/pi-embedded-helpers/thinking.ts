@@ -27,33 +27,27 @@ export function pickFallbackThinkingLevel(params: {
   if (!raw) {
     return undefined;
   }
-
-  // Try extracting explicit supported values (e.g. "Supported values are: 'low', 'medium', 'high'")
   const supported = extractSupportedValues(raw);
-  if (supported.length > 0) {
-    for (const entry of supported) {
-      const normalized = normalizeThinkLevel(entry);
-      if (!normalized) {
-        continue;
-      }
-      if (params.attempted.has(normalized)) {
-        continue;
-      }
-      return normalized;
+  if (supported.length === 0) {
+    // When the error clearly indicates the thinking level is unsupported but doesn't
+    // list supported values (e.g. OpenAI's "think value \"low\" is not supported for
+    // this model"), fall back to "off" to allow the request to succeed.
+    // This commonly happens during model fallback when switching from Anthropic
+    // (which supports thinking levels) to providers that don't.
+    if (/not supported/i.test(raw) && !params.attempted.has("off")) {
+      return "off";
     }
     return undefined;
   }
-
-  // Handle "Budget N is invalid" errors from thinking-only models (e.g. Gemini 3.1-pro on AGM).
-  // These models reject thinkingBudget: 0 or -1 but accept higher budgets via elevated thinking levels.
-  if (/budget\b.*\binvalid/i.test(raw) || /invalid.*\bbudget/i.test(raw)) {
-    const escalation: ThinkLevel[] = ["medium", "high"];
-    for (const level of escalation) {
-      if (!params.attempted.has(level)) {
-        return level;
-      }
+  for (const entry of supported) {
+    const normalized = normalizeThinkLevel(entry);
+    if (!normalized) {
+      continue;
     }
+    if (params.attempted.has(normalized)) {
+      continue;
+    }
+    return normalized;
   }
-
   return undefined;
 }
