@@ -32,6 +32,24 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => messageHookRunner,
 }));
 
+const mockFetchRemoteMedia = vi.fn();
+const mockSaveMediaBuffer = vi.fn();
+const mockGetCachedSticker = vi.fn();
+const mockCacheSticker = vi.fn();
+
+vi.mock("../../media/fetch.js", () => ({
+  fetchRemoteMedia: (...args: unknown[]) => mockFetchRemoteMedia(...args),
+}));
+
+vi.mock("../../media/store.js", () => ({
+  saveMediaBuffer: (...args: unknown[]) => mockSaveMediaBuffer(...args),
+}));
+
+vi.mock("../sticker-cache.js", () => ({
+  getCachedSticker: (...args: unknown[]) => mockGetCachedSticker(...args),
+  cacheSticker: (...args: unknown[]) => mockCacheSticker(...args),
+}));
+
 vi.mock("grammy", () => ({
   InputFile: class {
     constructor(
