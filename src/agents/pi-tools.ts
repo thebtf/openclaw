@@ -2,7 +2,7 @@ import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-a
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
-import type { SenderTier } from "../security/heimdall/types.js";
+import { type SenderTier, SenderTier as SenderTierEnum } from "../security/heimdall/types.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
@@ -553,8 +553,13 @@ export function createOpenClawCodingTools(options?: {
       undefined, // allowFrom (not applicable here)
       isTrustedInternal,
     );
-    // Task 2.3: OWNER override removed. Internal calls now use SYSTEM tier (least privilege).
-    // Legacy senderIsOwner still passed to applyOwnerOnlyToolPolicy for backward compat.
+
+    // Honour the pre-Heimdall senderIsOwner flag: if the caller was already
+    // authenticated as owner (e.g. channel-level check), promote to OWNER
+    // even when senderId was not propagated to this call-site.
+    if (senderIsOwner && senderTier !== SenderTierEnum.OWNER && senderTier !== SenderTierEnum.SYSTEM) {
+      senderTier = SenderTierEnum.OWNER;
+    }
   }
 
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
