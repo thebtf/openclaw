@@ -88,6 +88,11 @@ export function handleMessageUpdate(
 
   ctx.noteLastAssistant(msg);
 
+  // Reset idle watchdog on any streaming activity (thinking or text deltas).
+  // Without this, long-running model generations (research, extended thinking)
+  // are misclassified as idle timeouts because only message_start resets the timer.
+  ctx.params.onActivity?.();
+
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =
     assistantEvent && typeof assistantEvent === "object"
