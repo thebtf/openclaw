@@ -6,6 +6,13 @@ const QUICK_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking|final)\b/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
 const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
+/**
+ * Detect OpenAI Responses API reasoning leak: `N>thought\n...` format.
+ * When the proxy doesn't handle `reasoning` output items, they get serialized
+ * as plain text with a `sequence>type` prefix instead of proper content blocks.
+ */
+const OPENAI_REASONING_LEAK_RE = /^\d+>thought\s*\n/i;
+
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
     return value;
@@ -26,6 +33,12 @@ export function stripReasoningTagsFromText(
   if (!text) {
     return text;
   }
+
+  // Strip OpenAI reasoning leak: entire text is reasoning when it starts with `N>thought`.
+  if (OPENAI_REASONING_LEAK_RE.test(text)) {
+    return "";
+  }
+
   if (!QUICK_TAG_RE.test(text)) {
     return text;
   }

@@ -184,6 +184,29 @@ describe("stripReasoningTagsFromText", () => {
     });
   });
 
+  describe("OpenAI reasoning leak (N>thought format)", () => {
+    it("strips entire text when it starts with N>thought prefix", () => {
+      const input =
+        '94>thought\nCRITICAL INSTRUCTION 1: You may have access to tools.\nOkay.\nOkay.\nOkay.';
+      expect(stripReasoningTagsFromText(input)).toBe("");
+    });
+
+    it("strips with varying sequence numbers", () => {
+      expect(stripReasoningTagsFromText("0>thought\nreasoning here")).toBe("");
+      expect(stripReasoningTagsFromText("12345>thought\nsome content")).toBe("");
+    });
+
+    it("does not strip normal text containing >thought mid-string", () => {
+      const input = "I had a >thought about this.";
+      expect(stripReasoningTagsFromText(input)).toBe(input);
+    });
+
+    it("does not strip text that only has digit>word without thought keyword", () => {
+      const input = "94>response\nHello world";
+      expect(stripReasoningTagsFromText(input)).toBe(input);
+    });
+  });
+
   describe("strict vs preserve mode", () => {
     it("applies strict and preserve modes to unclosed tags", () => {
       const input = "Before <think>unclosed content after";
