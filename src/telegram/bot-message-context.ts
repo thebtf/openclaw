@@ -41,6 +41,19 @@ export type {
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 
+/**
+ * Returned by buildTelegramMessageContext when a group message was stopped by
+ * the mention gate (requireMention: true, no @mention, no reply-to-bot) but a
+ * prefilter hook should have the chance to override the drop decision.
+ *
+ * Handlers should fire a message:prefilter hook with `data`, then re-call
+ * buildTelegramMessageContext with `bypassMentionGate: true` if approved.
+ */
+export type MentionGateSkipped = {
+  readonly mentionGateSkipped: true;
+  readonly data: import("../hooks/internal-hooks.js").MessagePrefilterHookContext;
+};
+
 export const buildTelegramMessageContext = async ({
   primaryCtx,
   allMedia,
@@ -301,9 +314,25 @@ export const buildTelegramMessageContext = async ({
     groupHistories,
     historyLimit,
     logger,
+    accountId: account.accountId,
   });
   if (!bodyResult) {
     return null;
+  }
+  // Mention gate returned a prefilter signal — the message had no @mention and
+  // no reply-to-bot, but a hook can override the drop decision.
+  if ("mentionGateSkipped" in bodyResult) {
+    return {
+      mentionGateSkipped: true,
+      data: {
+        accountId: bodyResult.accountId,
+        channel: "telegram",
+        chatId: bodyResult.chatId,
+        messageId: bodyResult.messageId,
+        text: bodyResult.text,
+        senderId: bodyResult.senderId,
+      },
+    } satisfies MentionGateSkipped;
   }
 
   // Mention gate returned a prefilter signal — forward it to the caller so the
