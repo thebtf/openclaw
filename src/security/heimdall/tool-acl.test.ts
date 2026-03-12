@@ -228,10 +228,6 @@ describe("unknown tools", () => {
   it("allows unknown tool for OWNER", () => {
     expect(isToolAllowed("totally_made_up_tool", SenderTier.OWNER, noACL)).toBe(true);
   });
-
-  it("allows unknown tool for SYSTEM", () => {
-    expect(isToolAllowed("totally_made_up_tool", SenderTier.SYSTEM, noACL)).toBe(true);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -312,23 +308,54 @@ describe("tool name normalization", () => {
 });
 
 // ---------------------------------------------------------------------------
-// SYSTEM tier — full bypass (trusted internal runtime: cron, heartbeat, CLI)
+// SYSTEM tier — trusted internal runtime calls
 // ---------------------------------------------------------------------------
 
-describe("SYSTEM tier bypass", () => {
-  it("allows any tool for SYSTEM (same as OWNER)", () => {
-    expect(isToolAllowed("exec", SenderTier.SYSTEM, deny)).toBe(true);
-    expect(isToolAllowed("write", SenderTier.SYSTEM, deny)).toBe(true);
-    expect(isToolAllowed("search", SenderTier.SYSTEM, deny)).toBe(true);
-    expect(isToolAllowed("totally_unknown_tool", SenderTier.SYSTEM, deny)).toBe(true);
-    expect(isToolAllowed("mcp__server__execute_command", SenderTier.SYSTEM, deny)).toBe(true);
+describe("SYSTEM tier ACL", () => {
+  it("allows SYSTEM to use MEMBER safe tools (conservative baseline)", () => {
+    const safes = ["search", "read", "sessions_list", "memory_search", "web_search"];
+    safes.forEach((tool) => {
+      expect(isToolAllowed(tool, SenderTier.SYSTEM, noACL)).toBe(true);
+    });
   });
 
-  it("SYSTEM bypass cannot be restricted by custom ACL", () => {
+  it("denies SYSTEM dangerous tools by default (no OWNER bypass)", () => {
+    const dangerous = ["exec", "write", "edit", "apply_patch", "process"];
+    dangerous.forEach((tool) => {
+      expect(isToolAllowed(tool, SenderTier.SYSTEM, noACL)).toBe(false);
+    });
+  });
+
+  it("denies SYSTEM MCP execute/write/delete patterns", () => {
+    expect(isToolAllowed("mcp__server__execute_command", SenderTier.SYSTEM, noACL)).toBe(false);
+    expect(isToolAllowed("mcp__fs__write_file", SenderTier.SYSTEM, noACL)).toBe(false);
+    expect(isToolAllowed("mcp__db__delete_record", SenderTier.SYSTEM, noACL)).toBe(false);
+  });
+
+  it("respects custom ACL for SYSTEM tier", () => {
     const config = {
       ...deny,
-      toolACL: [{ pattern: "exec", allowedTiers: [SenderTier.GUEST] }],
+      toolACL: [
+        { pattern: "kg_query", allowedTiers: [SenderTier.SYSTEM, SenderTier.MEMBER] },
+        { pattern: "telegram_send*", allowedTiers: [SenderTier.SYSTEM] },
+      ],
     };
-    expect(isToolAllowed("exec", SenderTier.SYSTEM, config)).toBe(true);
+    expect(isToolAllowed("kg_query", SenderTier.SYSTEM, config)).toBe(true);
+    expect(isToolAllowed("telegram_send_message", SenderTier.SYSTEM, config)).toBe(true);
+    expect(isToolAllowed("exec", SenderTier.SYSTEM, config)).toBe(false);
+  });
+
+  it("denies SYSTEM tools not in safe list or custom ACL (fail-closed)", () => {
+    expect(isToolAllowed("unknown_tool", SenderTier.SYSTEM, noACL)).toBe(false);
+    expect(isToolAllowed("domain_resolve", SenderTier.SYSTEM, noACL)).toBe(false); // not in DEFAULT_MEMBER_SAFE
+  });
+
+  it("SYSTEM tier can be granted via custom ACL (explicit allow)", () => {
+    const config = {
+      ...deny,
+      toolACL: [{ pattern: "session_heartbeat", allowedTiers: [SenderTier.SYSTEM] }],
+    };
+    expect(isToolAllowed("session_heartbeat", SenderTier.SYSTEM, config)).toBe(true);
+    expect(isToolAllowed("session_heartbeat", SenderTier.MEMBER, config)).toBe(false);
   });
 });

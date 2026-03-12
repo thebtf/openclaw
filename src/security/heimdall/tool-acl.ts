@@ -7,10 +7,11 @@
  *   2. Normalize tool name via normalizeToolName
  *   3. Custom toolACL entries (glob-matched, first match wins)
  *   4. Default rules: dangerous patterns → deny; safe lists → allow; else deny
+ *      (SYSTEM tier uses MEMBER safe list as conservative baseline)
  */
 
-import type { HeimdallConfig, SenderTier } from "./types.js";
 import { normalizeToolName } from "../../agents/tool-policy.js";
+import type { HeimdallConfig, SenderTier } from "./types.js";
 import { SenderTier as SenderTierEnum } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,34 @@ const DEFAULT_DANGEROUS_PATTERNS: string[] = [
   "mcp__*__delete_*",
 ];
 
-/** Tools considered safe for MEMBER tier by default (read-only / low-risk). */
+/**
+ * Tools considered safe for MEMBER tier by default.
+ *
+ * **SYSTEM tier also uses this list** as conservative baseline (Task 1.3, Phase 1).
+ * SYSTEM tier gets read-only tools + audit trail, without OWNER privileges.
+ *
+ * **Rationale:**
+ * - All tools in this list are read-only or low-risk queries
+ * - No file writes, no command execution, no destructive operations
+ * - Suitable for internal runtime operations (cron, heartbeat, CLI)
+ *
+ * **To extend for SYSTEM tier**, add custom toolACL entry in config:
+ * ```typescript
+ * heimdall: {
+ *   enabled: true,
+ *   toolACL: [
+ *     {
+ *       pattern: "message",  // Allow notification delivery
+ *       allowedTiers: ["system", "member", "owner"],
+ *     },
+ *     {
+ *       pattern: "sessions_send",  // Allow agent-to-agent messaging
+ *       allowedTiers: ["system", "member", "owner"],
+ *     },
+ *   ],
+ * }
+ * ```
+ */
 const DEFAULT_MEMBER_SAFE: Set<string> = new Set([
   "search",
   "read",
@@ -101,16 +129,18 @@ function isDangerous(toolName: string): boolean {
  * Check whether `toolName` is allowed for `senderTier` under the given config.
  *
  * Rules (evaluated in order):
- * 1. OWNER or SYSTEM → always `true` (hardcoded bypass).
- *    SYSTEM tier = isTrustedInternal (cron, heartbeat, CLI) — the runtime
- *    must not be locked out of its own tools.
+ * 1. OWNER → always `true` (hardcoded bypass, config cannot restrict).
  * 2. Normalize tool name.
  * 3. Custom `toolACL` — first matching glob wins; allow if tier is listed.
  * 4. Defaults:
  *    a. Matches a dangerous pattern → deny.
- *    b. MEMBER + tool in MEMBER safe list → allow.
- *    c. GUEST + "read-only" policy + tool in read-only list → allow.
- *    d. Otherwise → deny.
+ *    b. SYSTEM + tool in MEMBER safe list → allow (conservative baseline).
+ *       - SYSTEM tier uses same baseline as MEMBER (read-only tools)
+ *       - Rationale: internal operations (cron, CLI) need minimal privileges
+ *       - To extend: add custom toolACL entry with "system" in allowedTiers
+ *    c. MEMBER + tool in MEMBER safe list → allow.
+ *    d. GUEST + "read-only" policy + tool in read-only list → allow.
+ *    e. Otherwise → deny.
  *
  * @example Extend SYSTEM tier baseline
  * ```typescript
@@ -128,10 +158,8 @@ export function isToolAllowed(
   senderTier: SenderTier,
   config: Pick<HeimdallConfig, "defaultGuestPolicy" | "toolACL">,
 ): boolean {
-  // 1. OWNER / SYSTEM bypass — SYSTEM tier comes from isTrustedInternal
-  // (cron, heartbeat, CLI) and has already been authenticated at the code-path
-  // level.  Restricting the runtime from its own tools is counterproductive.
-  if (senderTier === SenderTierEnum.OWNER || senderTier === SenderTierEnum.SYSTEM) {
+  // 1. OWNER bypass
+  if (senderTier === SenderTierEnum.OWNER) {
     return true;
   }
 
@@ -147,12 +175,17 @@ export function isToolAllowed(
     }
   }
 
-  // 4a. Dangerous patterns → deny non-OWNER/SYSTEM
+  // 4a. Dangerous patterns → deny non-OWNER
   if (isDangerous(normalized)) {
     return false;
   }
 
-  // 4b. MEMBER safe list
+  // 4b. SYSTEM tier — conservative baseline (same as MEMBER safe list)
+  if (senderTier === SenderTierEnum.SYSTEM && DEFAULT_MEMBER_SAFE.has(normalized)) {
+    return true;
+  }
+
+  // 4c. MEMBER safe list
   if (senderTier === SenderTierEnum.MEMBER && DEFAULT_MEMBER_SAFE.has(normalized)) {
     return true;
   }

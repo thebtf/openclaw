@@ -155,12 +155,12 @@ export async function runReplyAgent(params: {
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
-  const heimdallCfg = cfg?.agents?.defaults?.heimdall;
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
     cfg,
     sessionKey,
     workspaceDir: followupRun.run.workspaceDir,
   });
+  const heimdallCfg = cfg?.agents?.defaults?.heimdall;
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply
       ? resolveEffectiveBlockStreamingConfig({
@@ -712,6 +712,25 @@ export async function runReplyAgent(params: {
     if (heimdallCfg?.enabled && heimdallCfg.outputFilter?.enabled !== false) {
       const { applyOutputFilter } = await import("../../security/heimdall/apply-filter.js");
       finalPayloads = applyOutputFilter(finalPayloads, heimdallCfg);
+    }
+
+    // Post-compaction read audit (Layer 3)
+    if (sessionKey && pendingPostCompactionAudits.get(sessionKey)) {
+      pendingPostCompactionAudits.delete(sessionKey); // Delete FIRST — one-shot only
+      try {
+        const sessionFile = activeSessionEntry?.sessionFile;
+        if (sessionFile) {
+          const messages = readSessionMessages(sessionFile);
+          const readPaths = extractReadPaths(messages);
+          const workspaceDir = process.cwd();
+          const audit = auditPostCompactionReads(readPaths, workspaceDir);
+          if (!audit.passed) {
+            enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
+          }
+        }
+      } catch {
+        // Silent failure — audit is best-effort
+      }
     }
 
     return finalizeWithFollowup(

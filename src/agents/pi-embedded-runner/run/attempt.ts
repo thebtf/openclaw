@@ -1827,6 +1827,8 @@ export async function runEmbeddedAttempt(
                   sessionId: params.sessionId,
                   workspaceDir: params.workspaceDir,
                   messageProvider: params.messageProvider ?? undefined,
+                  trigger: params.trigger,
+                  channelId: params.messageChannel ?? params.messageProvider ?? undefined,
                 },
               )
               .catch((err) => {
@@ -2036,6 +2038,8 @@ export async function runEmbeddedAttempt(
                 sessionId: params.sessionId,
                 workspaceDir: params.workspaceDir,
                 messageProvider: params.messageProvider ?? undefined,
+                trigger: params.trigger,
+                channelId: params.messageChannel ?? params.messageProvider ?? undefined,
               },
             )
             .catch((err) => {
@@ -2097,6 +2101,8 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               workspaceDir: params.workspaceDir,
               messageProvider: params.messageProvider ?? undefined,
+              trigger: params.trigger,
+              channelId: params.messageChannel ?? params.messageProvider ?? undefined,
             },
           )
           .catch((err) => {

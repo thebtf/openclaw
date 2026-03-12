@@ -6,7 +6,7 @@ import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveSenderTier } from "../security/heimdall/sender-tier.js";
-import { type SenderTier, SenderTier as SenderTierEnum } from "../security/heimdall/types.js";
+import type { SenderTier } from "../security/heimdall/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -595,17 +595,8 @@ export function createOpenClawCodingTools(options?: {
       undefined, // allowFrom (not applicable here)
       isTrustedInternal,
     );
-
-    // Honour the pre-Heimdall senderIsOwner flag: if the caller was already
-    // authenticated as owner (e.g. channel-level check), promote to OWNER
-    // even when senderId was not propagated to this call-site.
-    if (
-      senderIsOwner &&
-      senderTier !== SenderTierEnum.OWNER &&
-      senderTier !== SenderTierEnum.SYSTEM
-    ) {
-      senderTier = SenderTierEnum.OWNER;
-    }
+    // Task 2.3: OWNER override removed. Internal calls now use SYSTEM tier (least privilege).
+    // Legacy senderIsOwner still passed to applyOwnerOnlyToolPolicy for backward compat.
   }
 
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);

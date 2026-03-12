@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { HeimdallConfig } from "./types.js";
 import { applyOutputFilter } from "./apply-filter.js";
 import { __resetAuditLogger, createHeimdallAuditLogger } from "./audit.js";
 import { redactOutput } from "./output-filter.js";
@@ -10,6 +9,7 @@ import { sanitizeInput } from "./sanitize.js";
 import { resolveSenderTier } from "./sender-tier.js";
 import { wrapBlockReplyWithFilter } from "./streaming-filter.js";
 import { isToolAllowed } from "./tool-acl.js";
+import type { HeimdallConfig } from "./types.js";
 import { SenderTier } from "./types.js";
 
 // Mock subsystem logger for audit tests
@@ -187,8 +187,7 @@ describe("Heimdall Full Pipeline Integration", () => {
         received.push(p);
       };
       const wrapped = wrapBlockReplyWithFilter(original, baseConfig);
-      // Use a non-triggering prefix to avoid "Generic Secret Assignment" matching "Token:"
-      await wrapped({ text: "PAT ghp_abcdefghijklmnopqrstuvwxyz0123456789" });
+      await wrapped({ text: "Token: ghp_abcdefghijklmnopqrstuvwxyz0123456789" });
       expect(received[0].text).toContain("[REDACTED:GitHub PAT]");
     });
   });

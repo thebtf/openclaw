@@ -37,7 +37,7 @@ import {
   normalizeVerboseLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
-import { type CliDeps } from "../../cli/outbound-send-deps.js";
+import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionTranscriptPath,
@@ -600,6 +600,9 @@ export async function runCronIsolatedAgentTurn(params: {
             sessionKey: agentSessionKey,
             agentId,
             trigger: "cron",
+            // Cron jobs are trusted local automation, so isolated runs should
+            // inherit owner-only tooling like local `openclaw agent` runs.
+            senderIsOwner: true,
             messageChannel,
             agentAccountId: resolvedDelivery.accountId,
             sessionFile,
@@ -627,8 +630,6 @@ export async function runCronIsolatedAgentTurn(params: {
             bootstrapPromptWarningSignature,
             // Task 2.2: Mark cron jobs as internal runtime calls (SYSTEM tier).
             internal: true,
-            // Heimdall: cron jobs always run as OWNER.
-            senderIsOwner: true,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
