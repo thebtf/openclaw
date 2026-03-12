@@ -93,12 +93,12 @@ async function resolveTelegramFileWithRetry(
   }
 }
 
-function resolveRequiredFetchImpl(proxyFetch?: typeof fetch): typeof fetch {
-  const fetchImpl = proxyFetch ?? globalThis.fetch;
-  if (!fetchImpl) {
+function resolveRequiredFetchImpl(fetchImpl?: typeof fetch): typeof fetch {
+  const resolved = fetchImpl ?? globalThis.fetch;
+  if (!resolved) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  return fetchImpl;
+  return resolved;
 }
 
 /** Build SSRF policy that includes a custom API hostname when apiRoot is set. */
@@ -115,6 +115,17 @@ function resolveSsrfPolicy(apiRoot?: string) {
     ],
   };
 }
+
+function resolveOptionalFetchImpl(fetchImpl?: typeof fetch): typeof fetch | null {
+  try {
+    return resolveRequiredFetchImpl(fetchImpl);
+  } catch {
+    return null;
+  }
+}
+
+/** Default idle timeout for Telegram media downloads (30 seconds). */
+const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
@@ -134,6 +145,7 @@ async function downloadAndSaveTelegramFile(params: {
     fetchImpl: params.fetchImpl,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
+    readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: resolveSsrfPolicy(params.apiRoot),
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
@@ -146,33 +158,122 @@ async function downloadAndSaveTelegramFile(params: {
   );
 }
 
+/**
+ * Fetch the file_path for a given file_id by calling the Telegram getFile API
+ * directly via fetchImpl (used for thumbnail file_ids which aren't the message's
+ * primary file and therefore cannot be resolved via ctx.getFile()).
+ */
+async function fetchThumbnailFilePath(params: {
+  fileId: string;
+  token: string;
+  fetchImpl: typeof fetch;
+  apiRoot?: string;
+}): Promise<string | null> {
+  const base = getTelegramApiBase(params.apiRoot);
+  const url = `${base}/bot${params.token}/getFile?file_id=${encodeURIComponent(params.fileId)}`;
+  try {
+    const resp = await params.fetchImpl(url);
+    if (!resp.ok) {
+      return null;
+    }
+    const data = (await resp.json()) as { ok?: boolean; result?: { file_path?: string } };
+    return data?.ok && data.result?.file_path ? data.result.file_path : null;
+  } catch {
+    return null;
+  }
+}
+
+type StickerMediaResult = {
+  path: string;
+  contentType?: string;
+  placeholder: string;
+  stickerMetadata?: StickerMetadata;
+};
+
 async function resolveStickerMedia(params: {
   msg: TelegramContext["message"];
   ctx: TelegramContext;
   maxBytes: number;
   token: string;
-  proxyFetch?: typeof fetch;
+  fetchImpl?: typeof fetch;
   apiRoot?: string;
-}): Promise<
-  | {
-      path: string;
-      contentType?: string;
-      placeholder: string;
-      stickerMetadata?: StickerMetadata;
-    }
-  | null
-  | undefined
-> {
-  const { msg, ctx, maxBytes, token, proxyFetch, apiRoot } = params;
+}): Promise<StickerMediaResult | null | undefined> {
+  const { msg, ctx, maxBytes, token, fetchImpl, apiRoot } = params;
   if (!msg.sticker) {
     return undefined;
   }
   const sticker = msg.sticker;
-  // Skip animated (TGS) and video (WEBM) stickers - only static WEBP supported
+
+  // For animated (TGS) and video (WEBM) stickers: try cache first, then thumbnail.
   if (sticker.is_animated || sticker.is_video) {
-    logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
-    return null;
+    const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+    if (cached) {
+      logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id} (animated/video)`);
+      const fileId = sticker.file_id ?? cached.fileId;
+      const emoji = sticker.emoji ?? cached.emoji;
+      const setName = sticker.set_name ?? cached.setName;
+      return {
+        path: "",
+        placeholder: "<media:sticker>",
+        stickerMetadata: {
+          emoji,
+          setName,
+          fileId,
+          fileUniqueId: sticker.file_unique_id,
+          cachedDescription: cached.description,
+          isVideo: sticker.is_video ? true : undefined,
+          isAnimated: sticker.is_animated ? true : undefined,
+        },
+      };
+    }
+    // No cache — try to download via thumbnail
+    const thumbnail = (sticker as { thumbnail?: { file_id?: string } }).thumbnail;
+    if (!thumbnail?.file_id) {
+      logVerbose("telegram: skipping animated/video sticker — no cache and no thumbnail available");
+      return null;
+    }
+    const resolvedFetchImpl = resolveOptionalFetchImpl(fetchImpl);
+    if (!resolvedFetchImpl) {
+      logVerbose("telegram: fetch not available for animated/video sticker thumbnail");
+      return null;
+    }
+    try {
+      const thumbFilePath = await fetchThumbnailFilePath({
+        fileId: thumbnail.file_id,
+        token,
+        fetchImpl: resolvedFetchImpl,
+        apiRoot,
+      });
+      if (!thumbFilePath) {
+        logVerbose("telegram: could not resolve thumbnail file_path for animated/video sticker");
+        return null;
+      }
+      const saved = await downloadAndSaveTelegramFile({
+        filePath: thumbFilePath,
+        token,
+        fetchImpl: resolvedFetchImpl,
+        maxBytes,
+        apiRoot,
+      });
+      return {
+        path: saved.path,
+        contentType: saved.contentType,
+        placeholder: "<media:sticker>",
+        stickerMetadata: {
+          emoji: sticker.emoji ?? undefined,
+          setName: sticker.set_name ?? undefined,
+          fileId: sticker.file_id,
+          fileUniqueId: sticker.file_unique_id,
+          isVideo: sticker.is_video ? true : undefined,
+          isAnimated: sticker.is_animated ? true : undefined,
+        },
+      };
+    } catch (err) {
+      logVerbose(`telegram: failed to download animated/video sticker thumbnail: ${String(err)}`);
+      return null;
+    }
   }
+
   if (!sticker.file_id) {
     return null;
   }
@@ -183,15 +284,15 @@ async function resolveStickerMedia(params: {
       logVerbose("telegram: getFile returned no file_path for sticker");
       return null;
     }
-    const fetchImpl = proxyFetch ?? globalThis.fetch;
-    if (!fetchImpl) {
+    const resolvedFetchImpl = resolveOptionalFetchImpl(fetchImpl);
+    if (!resolvedFetchImpl) {
       logVerbose("telegram: fetch not available for sticker download");
       return null;
     }
     const saved = await downloadAndSaveTelegramFile({
       filePath: file.file_path,
       token,
-      fetchImpl,
+      fetchImpl: resolvedFetchImpl,
       maxBytes,
       apiRoot,
     });
@@ -248,7 +349,7 @@ export async function resolveMedia(
   ctx: TelegramContext,
   maxBytes: number,
   token: string,
-  proxyFetch?: typeof fetch,
+  fetchImpl?: typeof fetch,
   apiRoot?: string,
 ): Promise<{
   path: string;
@@ -262,7 +363,7 @@ export async function resolveMedia(
     ctx,
     maxBytes,
     token,
-    proxyFetch,
+    fetchImpl,
     apiRoot,
   });
   if (stickerResolved !== undefined) {
@@ -284,7 +385,7 @@ export async function resolveMedia(
   const saved = await downloadAndSaveTelegramFile({
     filePath: file.file_path,
     token,
-    fetchImpl: resolveRequiredFetchImpl(proxyFetch),
+    fetchImpl: resolveRequiredFetchImpl(fetchImpl),
     maxBytes,
     telegramFileName: resolveTelegramFileName(msg),
     apiRoot,

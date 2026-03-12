@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import { TELEGRAM_FORUM_SERVICE_FIELDS } from "./forum-service-message.js";
 
+/**
+ * Returns true when the context result represents a dropped/skipped message —
+ * either an outright null (hard drop) or a MentionGateSkipped prefilter signal.
+ */
+function isSkipped(ctx: unknown): boolean {
+  return ctx === null || (typeof ctx === "object" && ctx !== null && "mentionGateSkipped" in ctx);
+}
+
 describe("buildTelegramMessageContext implicitMention forum service messages", () => {
   /**
    * Build a group message context where the user sends a message inside a
@@ -60,7 +68,7 @@ describe("buildTelegramMessageContext implicitMention forum service messages", (
 
     // With requireMention and no explicit @mention, the message should be
     // skipped (null) because implicitMention should NOT fire.
-    expect(ctx).toBeNull();
+    expect(isSkipped(ctx)).toBe(true);
   });
 
   it.each(TELEGRAM_FORUM_SERVICE_FIELDS)(
@@ -72,7 +80,7 @@ describe("buildTelegramMessageContext implicitMention forum service messages", (
         replyToMessageExtra: { [field]: {} },
       });
 
-      expect(ctx).toBeNull();
+      expect(isSkipped(ctx)).toBe(true);
     },
   );
 
@@ -83,7 +91,7 @@ describe("buildTelegramMessageContext implicitMention forum service messages", (
       replyToMessageExtra: { forum_topic_closed: {} },
     });
 
-    expect(ctx).toBeNull();
+    expect(isSkipped(ctx)).toBe(true);
   });
 
   it("does NOT trigger implicitMention for general_forum_topic_hidden service message", async () => {
@@ -93,7 +101,7 @@ describe("buildTelegramMessageContext implicitMention forum service messages", (
       replyToMessageExtra: { general_forum_topic_hidden: {} },
     });
 
-    expect(ctx).toBeNull();
+    expect(isSkipped(ctx)).toBe(true);
   });
 
   it("DOES trigger implicitMention for real bot replies (non-empty text)", async () => {
@@ -142,6 +150,6 @@ describe("buildTelegramMessageContext implicitMention forum service messages", (
     });
 
     // Different user's message → not an implicit mention → skipped.
-    expect(ctx).toBeNull();
+    expect(isSkipped(ctx)).toBe(true);
   });
 });

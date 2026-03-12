@@ -311,6 +311,8 @@ export type AgentCompactionConfig = {
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
+  /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
+  recentTurnsPreserve?: number;
   /** Identifier-preservation instruction policy for compaction summaries. */
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
@@ -327,7 +329,9 @@ export type AgentCompactionConfig = {
   postCompactionSections?: string[];
   /** Timeout in milliseconds for compaction runs (default: provider-specific). */
   timeoutMs?: number;
-  /** Override model for compaction summarization (provider/model string). */
+  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-5").
+   * When set, compaction uses this model instead of the agent's primary model.
+   * Falls back to the primary model when unset. */
   model?: string;
   /** Enable compaction model override (must be true for `model` to take effect). */
   overrideModel?: boolean;

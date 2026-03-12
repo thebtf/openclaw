@@ -4,12 +4,21 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import { danger, logVerbose } from "../../globals.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  buildCanonicalSentMessageHookContext,
+  toInternalMessageSentContext,
+  toPluginMessageContext,
+  toPluginMessageSentEvent,
+} from "../../hooks/message-hook-mappers.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../media/mime.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
+import { withTelegramApiErrorLogging } from "../api-logging.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
@@ -20,7 +29,6 @@ import {
 } from "../format.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
-import { withTelegramApiErrorLogging } from "../api-logging.js";
 import {
   buildTelegramSendParams,
   sendTelegramText,
@@ -494,10 +502,68 @@ async function maybePinFirstDeliveredMessage(params: {
   }
 }
 
+function emitMessageSentHooks(params: {
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  enabled: boolean;
+  sessionKeyForInternalHooks?: string;
+  chatId: string;
+  accountId?: string;
+  content: string;
+  success: boolean;
+  error?: string;
+  messageId?: number;
+  isGroup?: boolean;
+  groupId?: string;
+}): void {
+  if (!params.enabled && !params.sessionKeyForInternalHooks) {
+    return;
+  }
+  const canonical = buildCanonicalSentMessageHookContext({
+    to: params.chatId,
+    content: params.content,
+    success: params.success,
+    error: params.error,
+    channelId: "telegram",
+    accountId: params.accountId,
+    conversationId: params.chatId,
+    messageId: typeof params.messageId === "number" ? String(params.messageId) : undefined,
+    isGroup: params.isGroup,
+    groupId: params.groupId,
+  });
+  if (params.enabled) {
+    fireAndForgetHook(
+      Promise.resolve(
+        params.hookRunner!.runMessageSent(
+          toPluginMessageSentEvent(canonical),
+          toPluginMessageContext(canonical),
+        ),
+      ),
+      "telegram: message_sent plugin hook failed",
+    );
+  }
+  if (!params.sessionKeyForInternalHooks) {
+    return;
+  }
+  fireAndForgetHook(
+    triggerInternalHook(
+      createInternalHookEvent(
+        "message",
+        "sent",
+        params.sessionKeyForInternalHooks,
+        toInternalMessageSentContext(canonical),
+      ),
+    ),
+    "telegram: message:sent internal hook failed",
+  );
+}
+
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   chatId: string;
   accountId?: string;
+  sessionKeyForInternalHooks?: string;
+  mirrorIsGroup?: boolean;
+  mirrorGroupId?: string;
   token: string;
   runtime: RuntimeEnv;
   bot: Bot;
@@ -598,7 +664,10 @@ export async function deliverReplies(params: {
           runtime: params.runtime,
           fn: () =>
             params.bot.api.sendSticker(params.chatId, reply.stickerId!, {
-              ...buildTelegramSendParams({ replyToMessageId: stickerReplyToId, thread: params.thread }),
+              ...buildTelegramSendParams({
+                replyToMessageId: stickerReplyToId,
+                thread: params.thread,
+              }),
             }),
         });
         markDelivered(progress);
@@ -652,37 +721,31 @@ export async function deliverReplies(params: {
         firstDeliveredMessageId,
       });
 
-      if (hasMessageSentHooks) {
-        const deliveredThisReply = progress.deliveredCount > deliveredCountBeforeReply;
-        void hookRunner?.runMessageSent(
-          {
-            to: params.chatId,
-            content: contentForSentHook,
-            success: deliveredThisReply,
-          },
-          {
-            channelId: "telegram",
-            accountId: params.accountId,
-            conversationId: params.chatId,
-          },
-        );
-      }
+      emitMessageSentHooks({
+        hookRunner,
+        enabled: hasMessageSentHooks,
+        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        chatId: params.chatId,
+        accountId: params.accountId,
+        content: contentForSentHook,
+        success: progress.deliveredCount > deliveredCountBeforeReply,
+        messageId: firstDeliveredMessageId,
+        isGroup: params.mirrorIsGroup,
+        groupId: params.mirrorGroupId,
+      });
     } catch (error) {
-      if (hasMessageSentHooks) {
-        void hookRunner?.runMessageSent(
-          {
-            to: params.chatId,
-            content: contentForSentHook,
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-          },
-          {
-            channelId: "telegram",
-            accountId: params.accountId,
-            conversationId: params.chatId,
-          },
-        );
-      }
+      emitMessageSentHooks({
+        hookRunner,
+        enabled: hasMessageSentHooks,
+        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        chatId: params.chatId,
+        accountId: params.accountId,
+        content: contentForSentHook,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        isGroup: params.mirrorIsGroup,
+        groupId: params.mirrorGroupId,
+      });
       throw error;
     }
   }

@@ -813,7 +813,11 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
-  it("drops non-default account DMs without explicit bindings", async () => {
+  // Fork behavior: named-account DMs are processed with per-account session key isolation.
+  // Unlike upstream (which drops all non-default account messages without explicit bindings),
+  // this fork allows named-account DMs through to preserve multi-account DM workflows.
+  // See bot-message-context.named-account-dm.test.ts for detailed coverage.
+  it("processes non-default account DMs with per-account session isolation", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -842,7 +846,8 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(replySpy).not.toHaveBeenCalled();
+    // Fork: named-account DMs are allowed through (replySpy called once)
+    expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
   it("applies group mention overrides and fallback behavior", async () => {

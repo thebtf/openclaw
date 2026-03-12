@@ -96,6 +96,7 @@ export const AgentDefaultsSchema = z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
+        recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
         qualityGuard: z
           .object({
             enabled: z.boolean().optional(),
@@ -104,6 +105,7 @@ export const AgentDefaultsSchema = z
           .strict()
           .optional(),
         postCompactionSections: z.array(z.string()).optional(),
+        model: z.string().optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
@@ -122,7 +124,6 @@ export const AgentDefaultsSchema = z
           .strict()
           .optional(),
         timeoutMs: z.number().int().positive().optional(),
-        model: z.string().optional(),
         overrideModel: z.boolean().optional(),
       })
       .strict()
