@@ -210,6 +210,12 @@ export type AgentDefaultsConfig = {
   /** Default reasoning level when no /reasoning directive is present. */
   reasoningDefault?: "off" | "on" | "stream";
   timeoutSeconds?: number;
+  /**
+   * Absolute wall-clock hard cap for a single agent run in seconds (0 = disabled).
+   * Unlike `timeoutSeconds` (which resets on agent activity), this fires unconditionally.
+   * Use to prevent infinite loops that keep resetting the idle timeout.
+   */
+  maxRunTimeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**
