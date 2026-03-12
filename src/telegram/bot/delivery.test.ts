@@ -5,6 +5,10 @@ import { deliverReplies, resolveMedia } from "./delivery.js";
 import type { TelegramContext } from "./types.js";
 
 const loadWebMedia = vi.fn();
+const mockFetchRemoteMedia = vi.fn();
+const mockSaveMediaBuffer = vi.fn();
+const mockGetCachedSticker = vi.fn();
+const mockCacheSticker = vi.fn();
 const triggerInternalHook = vi.hoisted(() => vi.fn(async () => {}));
 const messageHookRunner = vi.hoisted(() => ({
   hasHooks: vi.fn<(name: string) => boolean>(() => false),
@@ -27,6 +31,19 @@ type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
 vi.mock("../../web/media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
+}));
+
+vi.mock("../../media/fetch.js", () => ({
+  fetchRemoteMedia: (...args: unknown[]) => mockFetchRemoteMedia(...args),
+}));
+
+vi.mock("../../media/store.js", () => ({
+  saveMediaBuffer: (...args: unknown[]) => mockSaveMediaBuffer(...args),
+}));
+
+vi.mock("../sticker-cache.js", () => ({
+  getCachedSticker: (...args: unknown[]) => mockGetCachedSticker(...args),
+  cacheSticker: (...args: unknown[]) => mockCacheSticker(...args),
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({

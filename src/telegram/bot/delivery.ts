@@ -430,8 +430,9 @@ export async function resolveMedia(
             setName,
           });
         }
+        const stickerPath = saved?.path ?? "";
         return {
-          path: saved?.path || undefined,
+          path: stickerPath,
           contentType: saved?.contentType,
           placeholder: "<media:sticker>",
           stickerMetadata: {

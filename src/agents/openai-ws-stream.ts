@@ -161,11 +161,9 @@ export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] 
   }
   return tools.map((tool) => ({
     type: "function" as const,
-    function: {
-      name: tool.name,
-      description: typeof tool.description === "string" ? tool.description : undefined,
-      parameters: (tool.parameters ?? {}) as Record<string, unknown>,
-    },
+    name: tool.name,
+    description: typeof tool.description === "string" ? tool.description : undefined,
+    parameters: (tool.parameters ?? {}) as Record<string, unknown>,
   }));
 }
 
