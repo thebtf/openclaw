@@ -1384,7 +1384,7 @@ export async function runEmbeddedPiAgent(
                 // maybeMarkAuthProfileFailure already skips timeouts.
                 await maybeMarkAuthProfileFailure({
                   profileId: lastProfileId,
-                  reason,
+                  reason: assistantProfileFailureReason,
                 });
               }
               if (timedOut && !isProbeSession) {
