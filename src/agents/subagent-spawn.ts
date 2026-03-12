@@ -77,6 +77,12 @@ export type SpawnSubagentContext = {
   requesterAgentIdOverride?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
+  /** Sender identity context propagated from parent for Heimdall tier resolution. */
+  senderContext?: {
+    senderId?: string;
+    senderUsername?: string;
+    senderIsOwner?: boolean;
+  };
 };
 
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
@@ -582,6 +588,10 @@ export async function spawnSubagentDirect(
         timeout: runTimeoutSeconds,
         label: label || undefined,
         ...spawnedMetadata,
+        // Propagate sender identity for Heimdall tier resolution in child session.
+        senderId: ctx.senderContext?.senderId,
+        senderUsername: ctx.senderContext?.senderUsername,
+        senderIsOwner: ctx.senderContext?.senderIsOwner,
       },
       timeoutMs: 10_000,
     });

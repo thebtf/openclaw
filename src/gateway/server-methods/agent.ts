@@ -193,8 +193,17 @@ export const agentHandlers: GatewayRequestHandlers = {
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
       workspaceDir?: string;
+      // Sender identity propagated from parent session (subagent spawn).
+      senderId?: string;
+      senderUsername?: string;
+      senderIsOwner?: boolean;
     };
-    const senderIsOwner = resolveSenderIsOwnerFromClient(client);
+    // Trust explicit senderIsOwner ONLY for subagent spawns (spawnedBy present).
+    // External clients cannot forge spawnedBy — it requires internal session context.
+    const senderIsOwner =
+      request.spawnedBy && typeof request.senderIsOwner === "boolean"
+        ? request.senderIsOwner
+        : resolveSenderIsOwnerFromClient(client);
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
     const normalizedSpawned = normalizeSpawnedRunMetadata({
@@ -631,6 +640,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           workspaceDir: request.workspaceDir,
         }),
         senderIsOwner,
+        // Propagate sender identity from parent session for Heimdall tier resolution.
+        senderId: request.senderId,
+        senderUsername: request.senderUsername,
       },
       runId,
       idempotencyKey: idem,

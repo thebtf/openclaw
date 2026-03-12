@@ -597,6 +597,13 @@ export function createOpenClawCodingTools(options?: {
     );
     // Task 2.3: OWNER override removed. Internal calls now use SYSTEM tier (least privilege).
     // Legacy senderIsOwner still passed to applyOwnerOnlyToolPolicy for backward compat.
+
+    // Defense-in-depth: if auth layer confirmed owner but Heimdall resolved GUEST
+    // (e.g. missing senderId propagation in subagent spawn), promote to OWNER.
+    // Does NOT override SYSTEM tier (internal:true paths remain highest privilege).
+    if (senderTier === "guest" && senderIsOwner) {
+      senderTier = "owner";
+    }
   }
 
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);

@@ -193,6 +193,11 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
       workspaceDir: spawnWorkspaceDir,
+      senderContext: {
+        senderId: options?.requesterSenderId ?? undefined,
+        senderUsername: undefined,
+        senderIsOwner: options?.senderIsOwner ?? undefined,
+      },
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,

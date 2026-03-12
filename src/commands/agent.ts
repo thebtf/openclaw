@@ -475,6 +475,8 @@ function runAgentAttempt(params: {
     // Task 2.2: Mark CLI invocations as internal runtime calls (SYSTEM tier).
     internal: true,
     senderIsOwner: params.opts.senderIsOwner,
+    senderId: params.opts.senderId,
+    senderUsername: params.opts.senderUsername,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,

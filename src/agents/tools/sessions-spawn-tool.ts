@@ -203,6 +203,7 @@ export function createSessionsSpawnTool(
           agentGroupSpace: opts?.agentGroupSpace,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
+          senderContext: opts?.senderContext,
         },
       );
 

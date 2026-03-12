@@ -63,6 +63,10 @@ export type AgentCommandOpts = {
   runContext?: AgentRunContext;
   /** Whether this caller is authorized for owner-only tools (defaults true for local CLI calls). */
   senderIsOwner?: boolean;
+  /** Sender identity for Heimdall tier resolution (propagated from parent in subagent spawn). */
+  senderId?: string;
+  /** Sender username for Heimdall tier resolution (propagated from parent in subagent spawn). */
+  senderUsername?: string;
   /** Group/spawn metadata for subagent policy inheritance and routing context. */
   groupId?: SpawnedRunMetadata["groupId"];
   groupChannel?: SpawnedRunMetadata["groupChannel"];
