@@ -25,8 +25,6 @@ vi.mock("./abort.js", () => ({
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
   formatAbortReplyText: vi.fn(() => "⚙️ Agent was aborted."),
   setAbortMemory: vi.fn(),
-  resolveSessionEntryForKey: vi.fn(() => ({ entry: undefined, key: undefined })),
-  isAbortTrigger: vi.fn(() => false),
 }));
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
