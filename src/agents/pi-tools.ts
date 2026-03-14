@@ -5,8 +5,6 @@ import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runt
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
-import { resolveSenderTier } from "../security/heimdall/sender-tier.js";
-import type { SenderTier } from "../security/heimdall/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -267,19 +265,10 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
-  /**
-   * Whether the sender is an owner (required for owner-only tools).
-   * DEPRECATED: Use `internal` flag instead for new code.
-   * This property overrides `internal` flag for backward compatibility (Task 2.3 will remove this).
-   */
+  /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
-  /**
-   * If true, this call originates from trusted internal runtime (cron, CLI, heartbeat).
-   * Maps to `isTrustedInternal` for Heimdall SYSTEM tier resolution.
-   * When true AND Heimdall enabled, results in SYSTEM tier (limited privileges).
-   * Currently overridden by senderIsOwner for backward compatibility.
-   */
-  internal?: boolean;
+  /** Callback invoked when sessions_yield tool is called. */
+  onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -543,6 +532,7 @@ export function createOpenClawCodingTools(options?: {
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
       sessionId: options?.sessionId,
+      onYield: options?.onYield,
     }),
   ];
   const toolsForMemoryFlush =
@@ -577,35 +567,6 @@ export function createOpenClawCodingTools(options?: {
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-
-  // Heimdall GATE: resolve sender tier for runtime tool ACL.
-  const heimdallCfg = options?.config?.agents?.defaults?.heimdall;
-  let senderTier: SenderTier | undefined;
-  if (heimdallCfg?.enabled) {
-    // If no senderId, infer from senderIsOwner (e.g. cron runs).
-    const effectiveSenderId = options?.senderId ?? (senderIsOwner ? "cron" : "unknown");
-
-    // Task 2.2: Map internal flag → isTrustedInternal for SYSTEM tier.
-    const isTrustedInternal = options?.internal === true;
-
-    senderTier = resolveSenderTier(
-      effectiveSenderId,
-      options?.senderUsername ?? undefined,
-      heimdallCfg,
-      undefined, // allowFrom (not applicable here)
-      isTrustedInternal,
-    );
-    // Task 2.3: OWNER override removed. Internal calls now use SYSTEM tier (least privilege).
-    // Legacy senderIsOwner still passed to applyOwnerOnlyToolPolicy for backward compat.
-
-    // Defense-in-depth: if auth layer confirmed owner but Heimdall resolved GUEST
-    // (e.g. missing senderId propagation in subagent spawn), promote to OWNER.
-    // Does NOT override SYSTEM tier (internal:true paths remain highest privilege).
-    if (senderTier === "guest" && senderIsOwner) {
-      senderTier = "owner";
-    }
-  }
-
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
@@ -644,8 +605,6 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-      senderTier,
-      heimdallConfig: heimdallCfg,
     }),
   );
   const withAbort = options?.abortSignal

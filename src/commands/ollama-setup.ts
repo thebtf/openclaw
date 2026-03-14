@@ -281,7 +281,6 @@ async function storeOllamaCredential(agentDir?: string): Promise<void> {
 export async function promptAndConfigureOllama(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
-  agentDir?: string;
 }): Promise<{ config: OpenClawConfig; defaultModelId: string }> {
   const { prompter } = params;
 
@@ -383,8 +382,6 @@ export async function promptAndConfigureOllama(params: {
     ...suggestedModels,
     ...modelNames.filter((name) => !suggestedModels.includes(name)),
   ];
-
-  await storeOllamaCredential(params.agentDir);
 
   const defaultModelId = suggestedModels[0] ?? OLLAMA_DEFAULT_MODEL;
   const config = applyOllamaProviderConfig(params.cfg, baseUrl, orderedModelNames);

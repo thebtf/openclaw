@@ -50,8 +50,7 @@ import { performGatewaySessionReset } from "../session-reset-service.js";
 import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
+  migrateAndPruneGatewaySessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -190,33 +189,20 @@ export const agentHandlers: GatewayRequestHandlers = {
       timeout?: number;
       bestEffortDeliver?: boolean;
       label?: string;
-      spawnedBy?: string;
       inputProvenance?: InputProvenance;
-      workspaceDir?: string;
-      // Sender identity propagated from parent session (subagent spawn).
-      senderId?: string;
-      senderUsername?: string;
-      senderIsOwner?: boolean;
     };
-    // Trust explicit senderIsOwner ONLY for subagent spawns (spawnedBy present).
-    // External clients cannot forge spawnedBy — it requires internal session context.
-    const senderIsOwner =
-      request.spawnedBy && typeof request.senderIsOwner === "boolean"
-        ? request.senderIsOwner
-        : resolveSenderIsOwnerFromClient(client);
+    const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
     const normalizedSpawned = normalizeSpawnedRunMetadata({
-      spawnedBy: request.spawnedBy,
       groupId: request.groupId,
       groupChannel: request.groupChannel,
       groupSpace: request.groupSpace,
-      workspaceDir: request.workspaceDir,
     });
     let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
     let resolvedGroupChannel: string | undefined = normalizedSpawned.groupChannel;
     let resolvedGroupSpace: string | undefined = normalizedSpawned.groupSpace;
-    let spawnedByValue = normalizedSpawned.spawnedBy;
+    let spawnedByValue: string | undefined;
     const inputProvenance = normalizeInputProvenance(request.inputProvenance);
     const cached = context.dedupe.get(`agent:${idem}`);
     if (cached) {
@@ -368,11 +354,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const sessionId = entry?.sessionId ?? randomUUID();
       const labelValue = request.label?.trim() || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
-      spawnedByValue = canonicalizeSpawnedByForAgent(
-        cfg,
-        sessionAgent,
-        spawnedByValue || entry?.spawnedBy,
-      );
+      spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
       let inheritedGroup:
         | { groupId?: string; groupChannel?: string; groupSpace?: string }
         | undefined;
@@ -396,6 +378,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionId,
         updatedAt: now,
         thinkingLevel: entry?.thinkingLevel,
+        fastMode: entry?.fastMode,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         systemSent: entry?.systemSent,
@@ -409,6 +392,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
+        spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
         groupId: resolvedGroupId ?? entry?.groupId,
@@ -440,18 +424,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (storePath) {
         const persisted = await updateSessionStore(storePath, (store) => {
-          const target = resolveGatewaySessionStoreTarget({
+          const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
             cfg,
             key: requestedSessionKey,
             store,
           });
-          pruneLegacyStoreKeys({
-            store,
-            canonicalKey: target.canonicalKey,
-            candidates: target.storeKeys,
-          });
-          const merged = mergeSessionEntry(store[canonicalSessionKey], nextEntryPatch);
-          store[canonicalSessionKey] = merged;
+          const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
+          store[primaryKey] = merged;
           return merged;
         });
         sessionEntry = persisted;
@@ -637,12 +616,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         // Internal-only: allow workspace override for spawned subagent runs.
         workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
           spawnedBy: spawnedByValue,
-          workspaceDir: request.workspaceDir,
+          workspaceDir: sessionEntry?.spawnedWorkspaceDir,
         }),
         senderIsOwner,
-        // Propagate sender identity from parent session for Heimdall tier resolution.
-        senderId: request.senderId,
-        senderUsername: request.senderUsername,
       },
       runId,
       idempotencyKey: idem,

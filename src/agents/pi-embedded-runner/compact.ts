@@ -7,6 +7,9 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { resolveSignalReactionLevel } from "../../../extensions/signal/src/reaction-level.js";
+import { resolveTelegramInlineButtonsScope } from "../../../extensions/telegram/src/inline-buttons.js";
+import { resolveTelegramReactionLevel } from "../../../extensions/telegram/src/reaction-level.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
@@ -18,18 +21,17 @@ import {
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { getMemorySearchManager } from "../../memory/index.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
-import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
-import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
-import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
@@ -38,8 +40,12 @@ import { ensureCustomApiRegistered } from "../custom-api-registry.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
-import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
-import { parseModelRef } from "../model-selection.js";
+import { resolveMemorySearchConfig } from "../memory-search.js";
+import {
+  applyLocalNoAuthHeaderOverride,
+  getApiKeyForModel,
+  resolveModelAuthMode,
+} from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
@@ -112,14 +118,11 @@ export type CompactEmbeddedPiSessionParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
-  /** Sender identifiers for Heimdall tier resolution. */
-  senderId?: string;
-  senderName?: string;
-  senderUsername?: string;
-  senderE164?: string;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   sessionFile: string;
+  /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
+  currentTokenCount?: number;
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;
@@ -156,6 +159,12 @@ function hasRealConversationContent(msg: AgentMessage): boolean {
 
 function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
+}
+
+function normalizeObservedTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function getMessageTextChars(msg: AgentMessage): number {
@@ -234,6 +243,9 @@ function classifyCompactionReason(reason?: string): string {
   if (text.includes("already compacted")) {
     return "already_compacted_recently";
   }
+  if (text.includes("still exceeds target")) {
+    return "live_context_still_exceeds_target";
+  }
   if (text.includes("guard")) {
     return "guard_blocked";
   }
@@ -260,6 +272,95 @@ function classifyCompactionReason(reason?: string): string {
     return "provider_error_5xx";
   }
   return "unknown";
+}
+
+function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
+  const mode = config?.agents?.defaults?.compaction?.postIndexSync;
+  if (mode === "off" || mode === "async" || mode === "await") {
+    return mode;
+  }
+  return "async";
+}
+
+async function runPostCompactionSessionMemorySync(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionFile: string;
+}): Promise<void> {
+  if (!params.config) {
+    return;
+  }
+  try {
+    const sessionFile = params.sessionFile.trim();
+    if (!sessionFile) {
+      return;
+    }
+    const agentId = resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: params.config,
+    });
+    const resolvedMemory = resolveMemorySearchConfig(params.config, agentId);
+    if (!resolvedMemory || !resolvedMemory.sources.includes("sessions")) {
+      return;
+    }
+    if (!resolvedMemory.sync.sessions.postCompactionForce) {
+      return;
+    }
+    const { manager } = await getMemorySearchManager({
+      cfg: params.config,
+      agentId,
+    });
+    if (!manager?.sync) {
+      return;
+    }
+    const syncTask = manager.sync({
+      reason: "post-compaction",
+      sessionFiles: [sessionFile],
+    });
+    await syncTask;
+  } catch (err) {
+    log.warn(`memory sync skipped (post-compaction): ${String(err)}`);
+  }
+}
+
+function syncPostCompactionSessionMemory(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionFile: string;
+  mode: "off" | "async" | "await";
+}): Promise<void> {
+  if (params.mode === "off" || !params.config) {
+    return Promise.resolve();
+  }
+
+  const syncTask = runPostCompactionSessionMemorySync({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
+  });
+  if (params.mode === "await") {
+    return syncTask;
+  }
+  void syncTask;
+  return Promise.resolve();
+}
+
+async function runPostCompactionSideEffects(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionFile: string;
+}): Promise<void> {
+  const sessionFile = params.sessionFile.trim();
+  if (!sessionFile) {
+    return;
+  }
+  emitSessionTranscriptUpdate(sessionFile);
+  await syncPostCompactionSessionMemory({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionFile,
+    mode: resolvePostCompactionIndexSyncMode(params.config),
+  });
 }
 
 /**
@@ -322,36 +423,19 @@ export async function compactEmbeddedPiSessionDirect(
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
   await ensureOpenClawModelsJson(params.config, agentDir);
-
-  // Override with compaction-specific model if configured and enabled
-  const compactionOverrideEnabled =
-    params.config?.agents?.defaults?.compaction?.overrideModel ?? false;
-  const compactionModelRef = compactionOverrideEnabled
-    ? params.config?.agents?.defaults?.compaction?.model?.trim()
-    : undefined;
-  let effectiveProvider = provider;
-  let effectiveModelId = modelId;
-  if (compactionModelRef) {
-    const parsed = parseModelRef(compactionModelRef, provider);
-    if (parsed) {
-      effectiveProvider = parsed.provider;
-      effectiveModelId = parsed.model;
-      log.info(`compaction: using override model ${effectiveProvider}/${effectiveModelId}`);
-    }
-  }
-
   const { model, error, authStorage, modelRegistry } = resolveModel(
-    effectiveProvider,
-    effectiveModelId,
+    provider,
+    modelId,
     agentDir,
     params.config,
   );
   if (!model) {
-    const reason = error ?? `Unknown model: ${effectiveProvider}/${effectiveModelId}`;
+    const reason = error ?? `Unknown model: ${provider}/${modelId}`;
     return fail(reason);
   }
+  let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>> | null = null;
   try {
-    const apiKeyInfo = await getApiKeyForModel({
+    apiKeyInfo = await getApiKeyForModel({
       model,
       cfg: params.config,
       profileId: authProfileId,
@@ -439,6 +523,13 @@ export async function compactEmbeddedPiSessionDirect(
       modelContextWindow: model.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
+    const effectiveModel = applyLocalNoAuthHeaderOverride(
+      ctxInfo.tokens < (model.contextWindow ?? Infinity)
+        ? { ...model, contextWindow: ctxInfo.tokens }
+        : model,
+      apiKeyInfo,
+    );
+
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
       exec: {
@@ -454,26 +545,22 @@ export async function compactEmbeddedPiSessionDirect(
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
       senderIsOwner: params.senderIsOwner,
       agentDir,
       workspaceDir: effectiveWorkspace,
       config: params.config,
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,
-      modelId: effectiveModelId,
+      modelId,
       modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const tools = sanitizeToolsForGoogle({
       tools: supportsModelTools(model) ? toolsRaw : [],
-      provider: effectiveProvider,
+      provider,
     });
     const allowedToolNames = collectAllowedToolNames({ tools });
-    logToolSchemasForGoogle({ tools, provider: effectiveProvider });
+    logToolSchemasForGoogle({ tools, provider });
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
@@ -541,14 +628,14 @@ export async function compactEmbeddedPiSessionDirect(
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),
       node: process.version,
-      model: `${effectiveProvider}/${effectiveModelId}`,
+      model: `${provider}/${modelId}`,
       shell: detectRuntimeShell(),
       channel: runtimeChannel,
       capabilities: runtimeCapabilities,
       channelActions,
     };
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
-    const reasoningTagHint = isReasoningTagProvider(effectiveProvider);
+    const reasoningTagHint = isReasoningTagProvider(provider);
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
@@ -614,8 +701,8 @@ export async function compactEmbeddedPiSessionDirect(
       await prewarmSessionFile(params.sessionFile);
       const transcriptPolicy = resolveTranscriptPolicy({
         modelApi: model.api,
-        provider: effectiveProvider,
-        modelId: effectiveModelId,
+        provider,
+        modelId,
       });
       const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
@@ -634,8 +721,8 @@ export async function compactEmbeddedPiSessionDirect(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
-        provider: effectiveProvider,
-        modelId: effectiveModelId,
+        provider,
+        modelId,
         model,
       });
       // Only create an explicit resource loader when there are extension factories
@@ -656,19 +743,12 @@ export async function compactEmbeddedPiSessionDirect(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      // Disable reasoning for compaction sessions. The SDK's generateSummary()
-      // hardcodes reasoning: "high" which triggers extended thinking on
-      // reasoning-capable models. Extended thinking adds significant latency
-      // and token cost (16K+ budget) to summarization with marginal quality
-      // benefit, and not all API-compatible providers support thinking params.
-      const compactionModel = model.reasoning ? { ...model, reasoning: false } : model;
-
       const { session } = await createAgentSession({
         cwd: effectiveWorkspace,
         agentDir,
         authStorage,
         modelRegistry,
-        model: compactionModel,
+        model: effectiveModel,
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         tools: builtInTools,
         customTools,
@@ -695,8 +775,8 @@ export async function compactEmbeddedPiSessionDirect(
         const prior = await sanitizeSessionHistory({
           messages: session.messages,
           modelApi: model.api,
-          modelId: effectiveModelId,
-          provider: effectiveProvider,
+          modelId,
+          provider,
           allowedToolNames,
           config: params.config,
           sessionManager,
@@ -731,6 +811,7 @@ export async function compactEmbeddedPiSessionDirect(
         const missingSessionKey = !params.sessionKey || !params.sessionKey.trim();
         const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
         const hookRunner = getGlobalHookRunner();
+        const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);
         const messageCountOriginal = originalMessages.length;
         let tokenCountOriginal: number | undefined;
         try {
@@ -742,14 +823,16 @@ export async function compactEmbeddedPiSessionDirect(
           tokenCountOriginal = undefined;
         }
         const messageCountBefore = session.messages.length;
-        let tokenCountBefore: number | undefined;
-        try {
-          tokenCountBefore = 0;
-          for (const message of session.messages) {
-            tokenCountBefore += estimateTokens(message);
+        let tokenCountBefore = observedTokenCount;
+        if (tokenCountBefore === undefined) {
+          try {
+            tokenCountBefore = 0;
+            for (const message of session.messages) {
+              tokenCountBefore += estimateTokens(message);
+            }
+          } catch {
+            tokenCountBefore = undefined;
           }
-        } catch {
-          tokenCountBefore = undefined;
         }
         // TODO(#7175): Consider exposing full message snapshots or pre-compaction injection
         // hooks; current events only report counts/metadata.
@@ -796,7 +879,7 @@ export async function compactEmbeddedPiSessionDirect(
         if (diagEnabled && preMetrics) {
           log.debug(
             `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `diagId=${diagId} trigger=${trigger} provider=${effectiveProvider}/${effectiveModelId} ` +
+              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
               `attempt=${attempt} maxAttempts=${maxAttempts} ` +
               `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
               `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
@@ -817,20 +900,29 @@ export async function compactEmbeddedPiSessionDirect(
           };
         }
 
-        const compactionTimeoutMs =
-          params.config?.agents?.defaults?.compaction?.timeoutMs ?? undefined;
         const compactStartedAt = Date.now();
         // Measure compactedCount from the original pre-limiting transcript so compaction
         // lifecycle metrics represent total reduction through the compaction pipeline.
         const messageCountCompactionInput = messageCountOriginal;
-        log.info(
-          `compaction: start sessionId=${params.sessionId} ` +
-            `model=${effectiveProvider}/${effectiveModelId} timeoutMs=${compactionTimeoutMs ?? "default"}`,
+        // Estimate full session tokens BEFORE compaction (including system prompt,
+        // bootstrap context, workspace files, and all history). This is needed for
+        // a correct sanity check — result.tokensBefore only covers the summarizable
+        // history subset, not the full session.
+        let fullSessionTokensBefore = 0;
+        try {
+          fullSessionTokensBefore = limited.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+        } catch {
+          // If token estimation throws on a malformed message, fall back to 0 so
+          // the sanity check below becomes a no-op instead of crashing compaction.
+        }
+        const result = await compactWithSafetyTimeout(() =>
+          session.compact(params.customInstructions),
         );
-        const result = await compactWithSafetyTimeout(
-          () => session.compact(params.customInstructions),
-          compactionTimeoutMs,
-        );
+        await runPostCompactionSideEffects({
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+        });
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {
@@ -838,8 +930,15 @@ export async function compactEmbeddedPiSessionDirect(
           for (const message of session.messages) {
             tokensAfter += estimateTokens(message);
           }
-          // Sanity check: tokensAfter should be less than tokensBefore
-          if (tokensAfter > result.tokensBefore) {
+          // Sanity check: compare against the best full-session pre-compaction baseline.
+          // Prefer the provider-observed live count when available; otherwise use the
+          // heuristic full-session estimate with a 10% margin for counter jitter.
+          const sanityCheckBaseline = observedTokenCount ?? fullSessionTokensBefore;
+          if (
+            sanityCheckBaseline > 0 &&
+            tokensAfter >
+              (observedTokenCount !== undefined ? sanityCheckBaseline : sanityCheckBaseline * 1.1)
+          ) {
             tokensAfter = undefined; // Don't trust the estimate
           }
         } catch {
@@ -848,17 +947,11 @@ export async function compactEmbeddedPiSessionDirect(
         }
         const messageCountAfter = session.messages.length;
         const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
-        log.info(
-          `compaction: done sessionId=${params.sessionId} ` +
-            `model=${effectiveProvider}/${effectiveModelId} ` +
-            `tokensBefore=${result.tokensBefore} tokensAfter=${tokensAfter ?? "?"} ` +
-            `durationMs=${Date.now() - compactStartedAt}`,
-        );
         const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics && postMetrics) {
           log.debug(
             `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `diagId=${diagId} trigger=${trigger} provider=${effectiveProvider}/${effectiveModelId} ` +
+              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
               `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
               `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
               `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
@@ -919,7 +1012,7 @@ export async function compactEmbeddedPiSessionDirect(
           result: {
             summary: result.summary,
             firstKeptEntryId: result.firstKeptEntryId,
-            tokensBefore: result.tokensBefore,
+            tokensBefore: observedTokenCount ?? result.tokensBefore,
             tokensAfter,
             details: result.details,
           },
@@ -979,14 +1072,77 @@ export async function compactEmbeddedPiSession(
           modelContextWindow: ceModel?.contextWindow,
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
         });
+        // When the context engine owns compaction, its compact() implementation
+        // bypasses compactEmbeddedPiSessionDirect (which fires the hooks internally).
+        // Fire before_compaction / after_compaction hooks here so plugin subscribers
+        // are notified regardless of which engine is active.
+        const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+        const hookRunner = engineOwnsCompaction ? getGlobalHookRunner() : null;
+        const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const { sessionAgentId } = resolveSessionAgentIds({
+          sessionKey: params.sessionKey,
+          config: params.config,
+        });
+        const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
+        const hookCtx = {
+          sessionId: params.sessionId,
+          agentId: sessionAgentId,
+          sessionKey: hookSessionKey,
+          workspaceDir: resolveUserPath(params.workspaceDir),
+          messageProvider: resolvedMessageProvider,
+        };
+        // Engine-owned compaction doesn't load the transcript at this level, so
+        // message counts are unavailable.  We pass sessionFile so hook subscribers
+        // can read the transcript themselves if they need exact counts.
+        if (hookRunner?.hasHooks("before_compaction")) {
+          try {
+            await hookRunner.runBeforeCompaction(
+              {
+                messageCount: -1,
+                sessionFile: params.sessionFile,
+              },
+              hookCtx,
+            );
+          } catch (err) {
+            log.warn("before_compaction hook failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
         const result = await contextEngine.compact({
           sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
           tokenBudget: ceCtxInfo.tokens,
+          currentTokenCount: params.currentTokenCount,
           customInstructions: params.customInstructions,
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
+        if (engineOwnsCompaction && result.ok && result.compacted) {
+          await runPostCompactionSideEffects({
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+          });
+        }
+        if (result.ok && result.compacted && hookRunner?.hasHooks("after_compaction")) {
+          try {
+            await hookRunner.runAfterCompaction(
+              {
+                messageCount: -1,
+                compactedCount: -1,
+                tokenCount: result.result?.tokensAfter,
+                sessionFile: params.sessionFile,
+              },
+              hookCtx,
+            );
+          } catch (err) {
+            log.warn("after_compaction hook failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
         return {
           ok: result.ok,
           compacted: result.compacted,
