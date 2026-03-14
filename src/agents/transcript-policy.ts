@@ -86,7 +86,7 @@ export function resolveTranscriptPolicy(params: {
     supportsOpenAiCompatTurnValidation(provider);
   const providerToolCallIdMode = resolveTranscriptToolCallIdMode(provider, modelId);
   const isMistral = providerToolCallIdMode === "strict9";
-  const isMinimax = isMinimaxModel({ provider, modelId });
+  const isMinimax = MINIMAX_MODEL_HINTS.some((h) => modelId.toLowerCase().includes(h));
   const shouldSanitizeGeminiThoughtSignaturesForProvider =
     shouldSanitizeGeminiThoughtSignaturesForModel({
       provider,
