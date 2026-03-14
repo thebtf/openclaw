@@ -134,7 +134,7 @@ export function createGooglePayloadLogger(params: {
       if (!isGoogleModel(model)) {
         return streamFn(model, context, options);
       }
-      const nextOnPayload = (payload: unknown) => {
+      const nextOnPayload = (payload: unknown, payloadModel: unknown) => {
         record({
           ...base,
           ts: new Date().toISOString(),
@@ -142,7 +142,7 @@ export function createGooglePayloadLogger(params: {
           payload,
           payloadDigest: digest(payload),
         });
-        options?.onPayload?.(payload);
+        options?.onPayload?.(payload, payloadModel as any);
       };
       return streamFn(model, context, {
         ...options,
