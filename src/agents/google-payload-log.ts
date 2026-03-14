@@ -142,7 +142,7 @@ export function createGooglePayloadLogger(params: {
           payload,
           payloadDigest: digest(payload),
         });
-        options?.onPayload?.(payload, model);
+        options?.onPayload?.(payload);
       };
       return streamFn(model, context, {
         ...options,
