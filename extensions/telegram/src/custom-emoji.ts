@@ -1,9 +1,9 @@
 import type { MessageEntity, Sticker } from "@grammyjs/types";
 import type { Bot } from "grammy";
-import type { OpenClawConfig } from "../config/config.js";
-import { logVerbose } from "../globals.js";
-import { fetchRemoteMedia } from "../media/fetch.js";
-import { saveMediaBuffer } from "../media/store.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { logVerbose } from "../../../src/globals.js";
+import { fetchRemoteMedia } from "../../../src/media/fetch.js";
+import { saveMediaBuffer } from "../../../src/media/store.js";
 import { cacheSticker, describeStickerImage, getCachedSticker } from "./sticker-cache.js";
 
 /**
