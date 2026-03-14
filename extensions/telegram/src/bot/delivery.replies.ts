@@ -21,6 +21,7 @@ import { isGifMedia, kindFromMime } from "../../../../src/media/mime.js";
 import { getGlobalHookRunner } from "../../../../src/plugins/hook-runner-global.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import { loadWebMedia } from "../../../whatsapp/src/media.js";
+import { withTelegramApiErrorLogging } from "../api-logging.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
@@ -559,6 +560,8 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
+  /** message_id of the incoming message to reply to when the agent initiates (no reply chain). */
+  incomingMessageId?: number;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -581,7 +584,8 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
-    if (!reply?.text && !hasMedia) {
+    const hasSticker = Boolean(reply?.stickerId);
+    if (!reply?.text && !hasMedia && !hasSticker) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
@@ -621,11 +625,40 @@ export async function deliverReplies(params: {
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const replyToId =
-        params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+        params.replyToMode === "off"
+          ? undefined
+          : (resolveTelegramReplyId(reply.replyToId) ?? params.incomingMessageId);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
       let firstDeliveredMessageId: number | undefined;
+
+      // Handle sticker delivery before text/media
+      if (hasSticker) {
+        const stickerReplyToId = resolveReplyToForSend({
+          replyToId,
+          replyToMode: params.replyToMode,
+          progress,
+        });
+        await withTelegramApiErrorLogging({
+          operation: "sendSticker",
+          runtime: params.runtime,
+          fn: () =>
+            params.bot.api.sendSticker(params.chatId, reply.stickerId!, {
+              ...buildTelegramSendParams({
+                replyToMessageId: stickerReplyToId,
+                thread: params.thread,
+              }),
+            }),
+        });
+        markDelivered(progress);
+        markReplyApplied(progress, stickerReplyToId);
+        // If there's no text or media, we're done with this reply
+        if (!reply.text && !hasMedia) {
+          continue;
+        }
+      }
+
       if (mediaList.length === 0) {
         firstDeliveredMessageId = await deliverTextReply({
           bot: params.bot,
