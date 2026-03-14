@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -54,6 +53,76 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+function buildResetSessionNoticeText(params: {
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  defaultModel: string;
+}): string {
+  const modelLabel = `${params.provider}/${params.model}`;
+  const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
+  return modelLabel === defaultLabel
+    ? `✅ New session started · model: ${modelLabel}`
+    : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})`;
+}
+
+function resolveResetSessionNoticeRoute(params: {
+  ctx: MsgContext;
+  command: ReturnType<typeof buildCommandContext>;
+}): {
+  channel: Parameters<typeof routeReply>[0]["channel"];
+  to: string;
+} | null {
+  const commandChannel = params.command.channel?.trim().toLowerCase();
+  const fallbackChannel =
+    commandChannel && commandChannel !== "webchat"
+      ? (commandChannel as Parameters<typeof routeReply>[0]["channel"])
+      : undefined;
+  const channel = params.ctx.OriginatingChannel ?? fallbackChannel;
+  const to = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
+  if (!channel || channel === "webchat" || !to) {
+    return null;
+  }
+  return { channel, to };
+}
+
+async function sendResetSessionNotice(params: {
+  ctx: MsgContext;
+  command: ReturnType<typeof buildCommandContext>;
+  sessionKey: string;
+  cfg: OpenClawConfig;
+  accountId: string | undefined;
+  threadId: string | number | undefined;
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  defaultModel: string;
+}): Promise<void> {
+  const route = resolveResetSessionNoticeRoute({
+    ctx: params.ctx,
+    command: params.command,
+  });
+  if (!route) {
+    return;
+  }
+  await routeReply({
+    payload: {
+      text: buildResetSessionNoticeText({
+        provider: params.provider,
+        model: params.model,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+      }),
+    },
+    channel: route.channel,
+    to: route.to,
+    sessionKey: params.sessionKey,
+    accountId: params.accountId,
+    threadId: params.threadId,
+    cfg: params.cfg,
+  });
+}
 
 type RunPreparedReplyParams = {
   ctx: MsgContext;
@@ -162,35 +231,6 @@ export async function runPreparedReply(
   } = params;
   let currentSystemSent = systemSent;
 
-  // Heimdall RATE LIMIT: check per-sender throttle before any LLM work.
-  const heimdallRateConfig = cfg?.agents?.defaults?.heimdall;
-  if (heimdallRateConfig?.enabled && heimdallRateConfig.rateLimit?.enabled) {
-    const senderId = sessionCtx.SenderId?.trim();
-    if (senderId) {
-      const { getHeimdallRateLimiter } = await import("../../security/heimdall/rate-limit.js");
-      const { resolveSenderTier } = await import("../../security/heimdall/sender-tier.js");
-      const senderTier = resolveSenderTier(
-        senderId,
-        sessionCtx.SenderUsername?.trim() ?? undefined,
-        heimdallRateConfig,
-      );
-      const limiter = getHeimdallRateLimiter(heimdallRateConfig.rateLimit);
-      if (limiter) {
-        const rateScope = sessionCtx.OriginatingChannel || sessionKey;
-        const result = limiter.check(senderId, senderTier, rateScope);
-        if (!result.allowed) {
-          const { getHeimdallAuditLogger } = await import("../../security/heimdall/audit.js");
-          getHeimdallAuditLogger(heimdallRateConfig.audit).logRateLimit({
-            senderId,
-            senderTier,
-          });
-          typing.cleanup();
-          return { text: "Rate limit exceeded. Please wait before sending more messages." };
-        }
-      }
-    }
-  }
-
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
@@ -262,22 +302,9 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  let baseBodyForPrompt = isBareSessionReset
+  const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
-
-  // Heimdall SANITIZE: apply input sanitization before LLM.
-  const heimdallCfg = cfg?.agents?.defaults?.heimdall;
-  if (heimdallCfg?.enabled && heimdallCfg.sanitize) {
-    const { sanitizeInput } = await import("../../security/heimdall/sanitize.js");
-    const { text: sanitized, warnings } = sanitizeInput(baseBodyForPrompt, heimdallCfg.sanitize);
-    if (warnings.length > 0) {
-      const { getHeimdallAuditLogger } = await import("../../security/heimdall/audit.js");
-      getHeimdallAuditLogger(heimdallCfg.audit).logSanitization({ warnings });
-    }
-    baseBodyForPrompt = sanitized;
-  }
-
   const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
@@ -387,7 +414,7 @@ export async function runPreparedReply(
     // oxlint-disable-next-line typescript/no-explicit-any
     const channel = ctx.OriginatingChannel || (command.channel as any);
     const to = ctx.OriginatingTo || command.from || command.to;
-    if (channel && to && !isGroupChat && command.senderIsOwner) {
+    if (channel && to && !isGroupChat) {
       const modelLabel = `${provider}/${model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
       const modelAuthLabel = resolveModelAuthLabel({
