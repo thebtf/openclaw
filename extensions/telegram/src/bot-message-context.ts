@@ -16,7 +16,10 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
 import { buildTelegramInboundContextPayload } from "./bot-message-context.session.js";
-import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
+import type {
+  BuildTelegramMessageContextParams,
+  MentionGateSkipped,
+} from "./bot-message-context.types.js";
 import {
   buildTypingThreadParams,
   resolveTelegramDirectPeerId,
@@ -34,6 +37,7 @@ import {
 
 export type {
   BuildTelegramMessageContextParams,
+  MentionGateSkipped,
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 
@@ -57,6 +61,7 @@ export const buildTelegramMessageContext = async ({
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
   sendChatActionHandler,
+  bypassMentionGate,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
@@ -291,6 +296,7 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     topicConfig,
     requireMention,
+    bypassMentionGate,
     options,
     groupHistories,
     historyLimit,
@@ -298,6 +304,15 @@ export const buildTelegramMessageContext = async ({
   });
   if (!bodyResult) {
     return null;
+  }
+  // Mention gate returned a prefilter signal — forward it to the caller so the
+  // message:prefilter hook can decide whether to approve the message.
+  if ("mentionGateSkipped" in bodyResult) {
+    // Populate accountId which is available in this scope.
+    return {
+      ...bodyResult,
+      data: { ...bodyResult.data, accountId: account.accountId },
+    };
   }
 
   if (!(await ensureConfiguredBindingReady())) {
@@ -468,6 +483,7 @@ export const buildTelegramMessageContext = async ({
   };
 };
 
-export type TelegramMessageContext = NonNullable<
-  Awaited<ReturnType<typeof buildTelegramMessageContext>>
+export type TelegramMessageContext = Exclude<
+  NonNullable<Awaited<ReturnType<typeof buildTelegramMessageContext>>>,
+  MentionGateSkipped
 >;
