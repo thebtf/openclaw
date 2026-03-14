@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { HeimdallConfig } from "../security/heimdall/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type {
   BlockStreamingChunkConfig,
@@ -206,7 +207,15 @@ export type AgentDefaultsConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
+  /** Default reasoning level when no /reasoning directive is present. */
+  reasoningDefault?: "off" | "on" | "stream";
   timeoutSeconds?: number;
+  /**
+   * Absolute wall-clock hard cap for a single agent run in seconds (0 = disabled).
+   * Unlike `timeoutSeconds` (which resets on agent activity), this fires unconditionally.
+   * Use to prevent infinite loops that keep resetting the idle timeout.
+   */
+  maxRunTimeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**
@@ -282,6 +291,8 @@ export type AgentDefaultsConfig = {
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
   };
+  /** Heimdall security layer (deterministic tool ACL, output redaction, input sanitization). */
+  heimdall?: HeimdallConfig;
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
 };
@@ -327,10 +338,14 @@ export type AgentCompactionConfig = {
    * Set to [] to disable post-compaction context injection entirely.
    */
   postCompactionSections?: string[];
+  /** Timeout in milliseconds for compaction runs (default: provider-specific). */
+  timeoutMs?: number;
   /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-5").
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /** Enable compaction model override (must be true for `model` to take effect). */
+  overrideModel?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
