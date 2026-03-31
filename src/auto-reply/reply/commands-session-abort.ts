@@ -1,6 +1,4 @@
-import { listAllRunningSessions } from "../../agents/bash-process-registry.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
-import { killProcessTree } from "../../agents/shell-utils.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -122,20 +120,6 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
-  // Kill all running exec sessions for this session
-  const targetKey = abortTarget.key ?? params.sessionKey;
-  if (targetKey) {
-    const runningSessions = listAllRunningSessions();
-    for (const session of runningSessions) {
-      if (session.sessionKey === targetKey) {
-        if (session.pid) {
-          killProcessTree(session.pid);
-        }
-        logVerbose(`stop: killed exec session ${session.id} (pid=${session.pid})`);
-      }
-    }
-  }
-
   const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(

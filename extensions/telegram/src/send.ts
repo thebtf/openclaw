@@ -268,7 +268,6 @@ function resolveTelegramClientOptions(
   const fetchImpl = resolveTelegramFetch(proxyFetch, {
     network: account.config.network,
   });
-  const apiRoot = account.config.apiRoot?.trim() || undefined;
   const clientOptions =
     fetchImpl || timeoutSeconds || apiRoot
       ? {

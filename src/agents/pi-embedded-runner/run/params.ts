@@ -54,11 +54,6 @@ export type RunEmbeddedPiAgentParams = {
   senderE164?: string | null;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
-  /**
-   * If true, this call originates from trusted internal runtime (CLI, cron, heartbeat).
-   * Maps to isTrustedInternal for Heimdall SYSTEM tier resolution.
-   */
-  internal?: boolean;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
@@ -108,7 +103,6 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapPromptWarningSignature?: string;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;
-  /** Idle timeout in ms: resets on agent activity (tool start, LLM message start). */
   timeoutMs: number;
   runId: string;
   abortSignal?: AbortSignal;

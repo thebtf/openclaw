@@ -67,27 +67,4 @@ export type BuildTelegramMessageContextParams = {
   upsertPairingRequest?: typeof import("openclaw/plugin-sdk/conversation-runtime").upsertChannelPairingRequest;
   /** Global (per-account) handler for sendChatAction 401 backoff (#27092). */
   sendChatActionHandler: import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;
-  /**
-   * When true, skip the mention gate check. Used on the second pass after the
-   * message:prefilter hook approves a message that was initially dropped due to
-   * no @mention.
-   */
-  bypassMentionGate?: boolean;
-};
-
-/**
- * Returned by buildTelegramMessageContext when a group message is dropped by
- * the mention gate but the message:prefilter hook should still be given the
- * chance to approve it.
- */
-export type MentionGateSkipped = {
-  mentionGateSkipped: true;
-  data: {
-    accountId: string;
-    channel: "telegram";
-    chatId: string | number;
-    messageId: string;
-    text: string;
-    senderId: string;
-  };
 };

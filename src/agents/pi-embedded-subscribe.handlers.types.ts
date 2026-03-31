@@ -144,7 +144,6 @@ export type ToolHandlerParams = Pick<
   | "sessionKey"
   | "sessionId"
   | "agentId"
-  | "onActivity"
 >;
 
 export type ToolHandlerState = Pick<

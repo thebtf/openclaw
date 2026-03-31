@@ -155,8 +155,6 @@ export function handleMessageStart(
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
-  // Signal activity so idle watchdog timers can reset.
-  ctx.params.onActivity?.();
 }
 
 export function handleMessageUpdate(
@@ -172,11 +170,6 @@ export function handleMessageUpdate(
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
-
-  // Reset idle watchdog on any streaming activity (thinking or text deltas).
-  // Without this, long-running model generations (research, extended thinking)
-  // are misclassified as idle timeouts because only message_start resets the timer.
-  ctx.params.onActivity?.();
 
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =

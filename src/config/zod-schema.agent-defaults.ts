@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { HeimdallSchema } from "../security/heimdall/config-schema.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
@@ -140,8 +139,6 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
-        timeoutMs: z.number().int().positive().optional(),
-        overrideModel: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -164,7 +161,6 @@ export const AgentDefaultsSchema = z
         z.literal("adaptive"),
       ])
       .optional(),
-    reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
@@ -175,7 +171,6 @@ export const AgentDefaultsSchema = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),
     timeoutSeconds: z.number().int().positive().optional(),
-    maxRunTimeoutSeconds: z.number().int().min(0).optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
@@ -212,7 +207,6 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
-    heimdall: HeimdallSchema,
     sandbox: AgentSandboxSchema,
   })
   .strict()

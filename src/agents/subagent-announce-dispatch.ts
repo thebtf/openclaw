@@ -69,7 +69,6 @@ export async function runSubagentAnnounceDispatch(params: {
     });
   }
 
-  // Non-completion mode: queue first (inject into parent session for LLM processing).
   if (!params.expectsCompletionMessage) {
     const primaryQueueOutcome = await params.queue();
     const primaryQueue = mapQueueOutcomeToDeliveryResult(primaryQueueOutcome);
@@ -86,10 +85,6 @@ export async function runSubagentAnnounceDispatch(params: {
     return withPhases(primaryDirect);
   }
 
-  // Completion mode: direct first (separate agent run avoids mixing announce
-  // with user messages in an active run — queue steer would concatenate them).
-  // The direct path uses method: "agent" with triggerMessage for LLM voice
-  // conversion instead of raw send with completionMessage.
   const primaryDirect = await params.direct();
   appendPhase("direct-primary", primaryDirect);
   if (primaryDirect.delivered) {

@@ -1,4 +1,3 @@
-import type { PluginLogger } from "../plugins/types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -9,6 +8,7 @@ import {
 } from "../plugins/channel-plugin-ids.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import type { PluginLogger } from "../plugins/types.js";
 
 const log = createSubsystemLogger("plugins");
 let pluginRegistryLoaded: "none" | "configured-channels" | "channels" | "all" = "none";

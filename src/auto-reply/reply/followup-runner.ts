@@ -396,15 +396,7 @@ export function createFollowupRunner(params: {
         }
       }
 
-      // Heimdall FILTER: redact secrets from followup reply payloads.
-      const heimdallCfg = queued.run.config?.agents?.defaults?.heimdall;
-      let filteredPayloads = finalPayloads;
-      if (heimdallCfg?.enabled && heimdallCfg.outputFilter?.enabled !== false) {
-        const { applyOutputFilter } = await import("../../security/heimdall/apply-filter.js");
-        filteredPayloads = applyOutputFilter(finalPayloads, heimdallCfg);
-      }
-
-      await sendFollowupPayloads(filteredPayloads, queued);
+      await sendFollowupPayloads(finalPayloads, queued);
     } finally {
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the

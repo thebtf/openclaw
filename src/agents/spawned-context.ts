@@ -15,12 +15,6 @@ export type SpawnedToolContext = {
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
   workspaceDir?: string;
-  /** Sender identity context propagated from parent for Heimdall tier resolution. */
-  senderContext?: {
-    senderId?: string;
-    senderUsername?: string;
-    senderIsOwner?: boolean;
-  };
 };
 
 export type NormalizedSpawnedRunMetadata = {

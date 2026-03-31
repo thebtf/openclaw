@@ -11,17 +11,6 @@ export type AuthProfileConfig = {
   displayName?: string;
 };
 
-export type AuthProviderOptions = {
-  /**
-   * When true, this provider is treated as a proxy/aggregator.
-   * Rate-limit and model-specific failures are tracked per (provider, model)
-   * instead of at the auth-profile level, preventing one rate-limited model
-   * from blocking all other models served by the same proxy.
-   */
-  isProxy?: boolean;
-  [key: string]: unknown;
-};
-
 export type AuthConfig = {
   profiles?: Record<string, AuthProfileConfig>;
   order?: Record<string, string[]>;
@@ -38,9 +27,4 @@ export type AuthConfig = {
      */
     failureWindowHours?: number;
   };
-  /**
-   * Per-provider options keyed by provider ID.
-   * Supports `isProxy: true` to enable per-model cooldown granularity.
-   */
-  providerOptions?: Record<string, AuthProviderOptions>;
 };

@@ -29,7 +29,6 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed } from "./bot-access.js";
 import type {
-  MentionGateSkipped,
   TelegramLogger,
   TelegramMediaRef,
   TelegramMessageContextOptions,
@@ -94,12 +93,11 @@ export async function resolveTelegramInboundBody(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   requireMention?: boolean;
-  bypassMentionGate?: boolean;
   options?: TelegramMessageContextOptions;
   groupHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
   logger: TelegramLogger;
-}): Promise<TelegramInboundBodyResult | MentionGateSkipped | null> {
+}): Promise<TelegramInboundBodyResult | null> {
   const {
     cfg,
     primaryCtx,
@@ -116,7 +114,6 @@ export async function resolveTelegramInboundBody(params: {
     groupConfig,
     topicConfig,
     requireMention,
-    bypassMentionGate,
     options,
     groupHistories,
     historyLimit,
@@ -254,9 +251,7 @@ export async function resolveTelegramInboundBody(params: {
     isGroup,
     requireMention: Boolean(requireMention),
     canDetectMention,
-    // When bypassMentionGate is true (second pass after prefilter hook approval),
-    // treat the message as if it was mentioned to skip the gate entirely.
-    wasMentioned: bypassMentionGate ? true : wasMentioned,
+    wasMentioned,
     implicitMention: isGroup && Boolean(requireMention) && implicitMention,
     hasAnyMention,
     allowTextCommands: true,
@@ -279,18 +274,7 @@ export async function resolveTelegramInboundBody(params: {
           }
         : null,
     });
-    // Return a prefilter signal so the message:prefilter hook can override the drop.
-    return {
-      mentionGateSkipped: true,
-      data: {
-        accountId: "",
-        channel: "telegram",
-        chatId,
-        messageId: typeof msg.message_id === "number" ? String(msg.message_id) : "",
-        text: rawBody,
-        senderId,
-      },
-    } satisfies MentionGateSkipped;
+    return null;
   }
 
   return {

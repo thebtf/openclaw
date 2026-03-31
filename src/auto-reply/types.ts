@@ -91,8 +91,6 @@ export type ReplyPayload = {
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
   isError?: boolean;
-  /** Telegram sticker file_id for auto-delivery as part of the reply. */
-  stickerId?: string;
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;

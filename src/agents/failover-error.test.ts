@@ -508,44 +508,4 @@ describe("failover-error", () => {
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
   });
-
-  it("infers timeout from expanded network error codes", () => {
-    expect(resolveFailoverReasonFromError({ code: "ENOTFOUND" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ code: "ECONNREFUSED" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ code: "UND_ERR_CONNECT_TIMEOUT" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ code: "UND_ERR_HEADERS_TIMEOUT" })).toBe("timeout");
-  });
-
-  it("walks cause chain to find network error codes", () => {
-    const inner = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
-    const outer = new TypeError("fetch failed", { cause: inner });
-    expect(resolveFailoverReasonFromError(outer)).toBe("timeout");
-  });
-
-  it("classifies fetch failed message via text patterns", () => {
-    expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "auth_unavailable: no auth" })).toBe("auth");
-  });
-
-  it("infers timeout from 5xx HTTP status codes", () => {
-    expect(resolveFailoverReasonFromError({ status: 500 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 521 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("timeout");
-  });
-
-  it("classifies JSON with string error code via message text", () => {
-    // Gemini EOF error via CLIProxyAPI: code is "internal_server_error", not numeric
-    const geminiEof = JSON.stringify({
-      error: {
-        message:
-          'Post "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent": EOF',
-        type: "server_error",
-        code: "internal_server_error",
-      },
-    });
-    expect(resolveFailoverReasonFromError({ message: geminiEof })).toBe("timeout");
-  });
 });

@@ -454,26 +454,18 @@ export async function runPreparedReply(
     }
   }
   if (resetTriggered && command.isAuthorizedSender) {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const channel = ctx.OriginatingChannel || (command.channel as any);
-    const to = ctx.OriginatingTo || command.from || command.to;
-    if (channel && to && !isGroupChat) {
-      const modelLabel = `${provider}/${model}`;
-      const defaultLabel = `${defaultProvider}/${defaultModel}`;
-      const text =
-        modelLabel === defaultLabel
-          ? `✅ New session started · model: ${modelLabel}`
-          : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})`;
-      await routeReply({
-        payload: { text },
-        channel,
-        to,
-        sessionKey,
-        accountId: ctx.AccountId,
-        threadId: ctx.MessageThreadId,
-        cfg,
-      });
-    }
+    await sendResetSessionNotice({
+      ctx,
+      command,
+      sessionKey,
+      cfg,
+      accountId: ctx.AccountId,
+      threadId: ctx.MessageThreadId,
+      provider,
+      model,
+      defaultProvider,
+      defaultModel,
+    });
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(

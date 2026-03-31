@@ -31,7 +31,6 @@ export type TranscriptPolicy = {
   allowSyntheticToolResults: boolean;
 };
 
-const MINIMAX_MODEL_HINTS = ["minimax"];
 const OPENAI_MODEL_APIS = new Set([
   "openai",
   "openai-completions",
@@ -58,18 +57,6 @@ function isAnthropicApi(modelApi?: string | null, provider?: string | null): boo
   return isAnthropicProviderFamily(provider);
 }
 
-function isMinimaxModel(params: { provider?: string | null; modelId?: string | null }): boolean {
-  const provider = normalizeProviderId(params.provider ?? "");
-  if (provider === "minimax" || provider === "minimax-cn") {
-    return true;
-  }
-  const modelId = (params.modelId ?? "").toLowerCase();
-  if (!modelId) {
-    return false;
-  }
-  return MINIMAX_MODEL_HINTS.some((hint) => modelId.includes(hint));
-}
-
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -86,7 +73,6 @@ export function resolveTranscriptPolicy(params: {
     supportsOpenAiCompatTurnValidation(provider);
   const providerToolCallIdMode = resolveTranscriptToolCallIdMode(provider, modelId);
   const isMistral = providerToolCallIdMode === "strict9";
-  const isMinimax = MINIMAX_MODEL_HINTS.some((h) => modelId.toLowerCase().includes(h));
   const shouldSanitizeGeminiThoughtSignaturesForProvider =
     shouldSanitizeGeminiThoughtSignaturesForModel({
       provider,
@@ -138,6 +124,6 @@ export function resolveTranscriptPolicy(params: {
     applyGoogleTurnOrdering: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
     validateGeminiTurns: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
-    allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic || isMinimax),
+    allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }
