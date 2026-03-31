@@ -453,7 +453,7 @@ export async function runPreparedReply(
       }
     }
   }
-  if (resetTriggered && command.isAuthorizedSender) {
+  if (resetTriggered && command.isAuthorizedSender && !isGroupChat) {
     await sendResetSessionNotice({
       ctx,
       command,
