@@ -145,6 +145,22 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   normalizeTextLikeParam(normalized, "content");
   normalizeTextLikeParam(normalized, "oldText");
   normalizeTextLikeParam(normalized, "newText");
+
+  // pi-coding-agent edit tool expects { path, edits: [{ oldText, newText }] }.
+  // Models trained on Claude Code emit flat { path, oldText, newText } instead.
+  // Wrap flat params into the edits array so schema validation passes.
+  if (
+    "oldText" in normalized &&
+    typeof normalized.oldText === "string" &&
+    !("edits" in normalized)
+  ) {
+    const newText =
+      typeof normalized.newText === "string" ? normalized.newText : "";
+    normalized.edits = [{ oldText: normalized.oldText, newText }];
+    delete normalized.oldText;
+    delete normalized.newText;
+  }
+
   return normalized;
 }
 
@@ -164,17 +180,45 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
     : [];
   const changed = addClaudeParamAliasesToSchema({ properties, required });
 
-  if (!changed) {
+  // pi-coding-agent edit tool uses { path, edits: [{ oldText, newText }] } with
+  // additionalProperties: false. Models trained on Claude Code emit flat { path, oldText, newText }.
+  // Relax the schema: add flat aliases and allow additional properties so AJV doesn't reject
+  // before our normalizeToolParams wrapper can reshape the input.
+  if (tool.name === "edit" && "edits" in properties) {
+    // Allow flat oldText/newText/old_string/new_string at root level
+    if (!("oldText" in properties)) {
+      properties.oldText = { type: "string", description: "Alias for edits[0].oldText (Claude Code compat)" };
+    }
+    if (!("newText" in properties)) {
+      properties.newText = { type: "string", description: "Alias for edits[0].newText (Claude Code compat)" };
+    }
+    // Make edits optional (flat params are the alternative)
+    const editsIdx = required.indexOf("edits");
+    if (editsIdx !== -1) {
+      required.splice(editsIdx, 1);
+    }
+  }
+
+  // For edit tools with additionalProperties: false, relax to allow alias properties
+  const dropAdditionalProps =
+    tool.name === "edit" && schema.additionalProperties === false;
+
+  if (!changed && !dropAdditionalProps) {
     return tool;
+  }
+
+  const patched: Record<string, unknown> = {
+    ...schema,
+    properties,
+    required,
+  };
+  if (dropAdditionalProps) {
+    delete patched.additionalProperties;
   }
 
   return {
     ...tool,
-    parameters: {
-      ...schema,
-      properties,
-      required,
-    },
+    parameters: patched,
   };
 }
 
