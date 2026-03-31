@@ -15,17 +15,9 @@ Each patch is a single commit with `Fork patch:` in the message for traceability
 | transcript-repair-no-retry | `fix(agents): instruct agent not to retry` | "DO NOT retry" text in synthetic error for lost tool results. | ✅ Re-implemented |
 | suppress-reset-banner | `fix(auto-reply): suppress session-reset banner` | Suppress `✅ New session started` in group chats. | ✅ Re-implemented |
 | google-payload-log | `src/agents/google-payload-log.ts` | Google provider payload logger (mirrors Anthropic). Standalone file. | ✅ Survived merge |
-
-## Patches Needing Re-Implementation
-
-| Patch | What it does | Why not done yet |
-|-------|-------------|------------------|
-| idle-watchdog-timeout | Replace wall-clock abort with idle watchdog (resets on activity) + hard cap timer. | Multi-file (9 files), needs study of new `run/attempt.ts` structure |
-| gemini-invalid-argument-recovery | Auto-recover from Gemini INVALID_ARGUMENT errors, retry with cleaned params. | Needs study of new error handling in `pi-embedded-helpers/errors.ts` |
-| pairing-privacy | Redact `provider/model` from user-facing error messages. | Needs new `redactModelIdentifiers()` function + integration points |
-| minimax-tool-result-pairing | Enable tool_use/result pairing repair for MiniMax provider. | Needs study of `transcript-policy.ts` changes |
-| bot-api-reset-detection | Auto-heal stale Telegram update offset after Bot API server restart. | Needs study of new `extensions/telegram/src/monitor.ts` |
-| delivery-message-guard | Oversized messages → permanent error, caps subagent findings. | `delivery-queue.ts` restructured, need new integration point |
+| gemini-invalid-argument | `fix: re-implement remaining fork patches` | Classify Gemini INVALID_ARGUMENT as retryable (isGeminiInvalidArgumentError). | ✅ Re-implemented |
+| pairing-privacy | `fix: re-implement remaining fork patches` | redactProviderModelNames() strips provider/model from user-facing errors. | ✅ Re-implemented |
+| delivery-message-guard | `fix: re-implement remaining fork patches` | Oversized messages added to PERMANENT_ERROR_PATTERNS in delivery-queue-recovery. | ✅ Re-implemented |
 
 ## Dropped Patches (upstream covers)
 
@@ -43,6 +35,9 @@ Each patch is a single commit with `Fork patch:` in the message for traceability
 | feat/telegram-local-bot-api | Upstream #48842 added apiRoot + resolveTelegramApiBase |
 | fix/stop-kills-exec-processes | Code absorbed upstream, fork-only test removed |
 | feat/announce-voice-conversion | Code already in upstream subagent-announce.ts |
+| feat/idle-watchdog-timeout | Upstream has idleTimeoutSeconds + runTimeoutSeconds (both idle watchdog and hard cap) |
+| fix/minimax-tool-result-pairing | Upstream repairToolUseResultPairing=true for ALL providers |
+| fix/telegram-bot-api-reset-detection | Upstream confirmPersistedOffset() probes on startup |
 
 ## Dead Code Removed (2026-03-31)
 
