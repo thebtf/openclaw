@@ -1,37 +1,23 @@
 # Continuity State
 
-**Last Updated:** 2026-03-14
-**Session:** Upstream update COMPLETE
+**Last Updated:** 2026-03-31
+**Session:** Upstream update (4963 commits) + disk cleanup
 
 ## Done
 
-- **Upstream update (2026-03-14):** 970 commits merged, all phases complete
-  - Phase 2: 130 conflicts resolved
-  - Phase 3: 7 patches dropped (Heimdall ×2, cooldown, reasoning ×2, failover, compaction-guard)
-  - Phase 4: 16 branches rebased/recreated (dirty branches recreated via diff-apply)
-  - Phase 5: All 16 re-merged into main
-  - Phase 5.5: All 16 patch tags updated
-  - Phase 6+7: Build passes, gateway deployed
-  - Phase 8: main + tags pushed to origin
-- **Heimdall disabled:** `agents.defaults.heimdall.enabled: false`
-- **Neuromancer on claude-cli/sonnet:** tested, working
-- **Agent bootstrap audit:** KG removed, English policy, bootstrap slimmed
-- **Social fetcher:** git init, CLAUDE.md/AGENTS.md
+- **Upstream update (2026-03-31):** 4963 commits merged, 137 conflicts resolved, 16 branches recreated, build OK, deployed, pushed
+- **Disk cleanup:** 96% → 61% (freed 22G: uv cache 12G, puppeteer 3.3G, KG projects 10G, pnpm prune 5G)
+- **Stale files removed:** api-base.ts (upstream has resolveTelegramApiBase), custom-emoji.ts, forum-topic-cache.ts (dead imports)
+- **Previous:** Heimdall disabled, Neuromancer on claude-cli/sonnet, engram v2.1.6, litellm provider, heartbeat on litellm/qwen, double-dispatch fixed, social fetcher rewritten
 
 ## Now
 
-Update complete. System running on latest upstream + 16 fork patches.
+Gateway deployed with latest upstream + 16 patches.
 
 ## Next
 
-- [ ] Clean KG references from main agent TOOLS.md (`~/.openclaw/workspace/TOOLS.md`)
-- [ ] Re-apply sticker delivery.resolve-media patch on new transport API (lost in merge)
-- [ ] Verify Jeeves works in group chat (Heimdall disabled)
-- [ ] Run regression tests when convenient
+- [ ] Clean KG "Knowledge Graph v10" section from `~/.openclaw/workspace/TOOLS.md`
+- [ ] Verify gateway + bots work after update
 
 ## Blockers
 None.
-
-## Patch Branch Table (16 active — see .agent/PATCHES.md)
-
-23 → 16 patches. Dropped: Heimdall ×2, proxy-model-cooldown, reasoning-default-config, failover-invalid-argument, model-reasoning-false-override, compaction-guard-unresolved-tool-calls.
