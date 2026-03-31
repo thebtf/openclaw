@@ -13,7 +13,7 @@ import {
   DEFAULT_MEDIA_CONCURRENCY,
   DEFAULT_PROMPT,
 } from "./defaults.js";
-import { normalizeMediaProviderId } from "./providers/index.js";
+import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 
 export function resolveTimeoutMs(seconds: number | undefined, fallbackSeconds: number): number {

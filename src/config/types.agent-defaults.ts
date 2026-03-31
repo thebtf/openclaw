@@ -1,5 +1,4 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { HeimdallConfig } from "../security/heimdall/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type {
   BlockStreamingChunkConfig,
@@ -123,6 +122,8 @@ export type AgentDefaultsConfig = {
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
+  /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
+  imageGenerationModel?: AgentModelConfig;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */
@@ -170,6 +171,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** LLM timeout configuration. */
+  llm?: AgentLlmConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
@@ -207,15 +210,7 @@ export type AgentDefaultsConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
-  /** Default reasoning level when no /reasoning directive is present. */
-  reasoningDefault?: "off" | "on" | "stream";
   timeoutSeconds?: number;
-  /**
-   * Absolute wall-clock hard cap for a single agent run in seconds (0 = disabled).
-   * Unlike `timeoutSeconds` (which resets on agent activity), this fires unconditionally.
-   * Use to prevent infinite loops that keep resetting the idle timeout.
-   */
-  maxRunTimeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**
@@ -263,6 +258,13 @@ export type AgentDefaultsConfig = {
      */
     lightContext?: boolean;
     /**
+     * If true, run heartbeat turns in an isolated session with no prior
+     * conversation history. The heartbeat only sees its bootstrap context
+     * (HEARTBEAT.md when lightContext is also enabled). Dramatically reduces
+     * per-heartbeat token cost by avoiding the full session transcript.
+     */
+    isolatedSession?: boolean;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *
@@ -280,7 +282,7 @@ export type AgentDefaultsConfig = {
     maxSpawnDepth?: number;
     /** Maximum active children a single requester session may spawn. Default behavior: 5. */
     maxChildrenPerAgent?: number;
-    /** Auto-archive sub-agent sessions after N minutes (default: 60). */
+    /** Auto-archive sub-agent sessions after N minutes (default: 60, set 0 to disable). */
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
@@ -290,9 +292,9 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
+    /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
+    requireAgentId?: boolean;
   };
-  /** Heimdall security layer (deterministic tool ACL, output redaction, input sanitization). */
-  heimdall?: HeimdallConfig;
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
 };
@@ -338,14 +340,18 @@ export type AgentCompactionConfig = {
    * Set to [] to disable post-compaction context injection entirely.
    */
   postCompactionSections?: string[];
-  /** Timeout in milliseconds for compaction runs (default: provider-specific). */
-  timeoutMs?: number;
   /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-5").
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
-  /** Enable compaction model override (must be true for `model` to take effect). */
-  overrideModel?: boolean;
+  /** Maximum time in seconds for a single compaction operation (default: 900). */
+  timeoutSeconds?: number;
+  /**
+   * Truncate the session JSONL file after compaction to remove entries that
+   * were summarized. Prevents unbounded file growth in long-running sessions.
+   * Default: false (existing behavior preserved).
+   */
+  truncateAfterCompaction?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
@@ -362,4 +368,17 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+/**
+ * LLM timeout configuration.
+ */
+export type AgentLlmConfig = {
+  /**
+   * Idle timeout for LLM streaming responses in seconds.
+   * If no token is received within this time, the request is aborted.
+   * Set to 0 to disable (never timeout).
+   * Default: 60 seconds.
+   */
+  idleTimeoutSeconds?: number;
 };

@@ -5,6 +5,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import {
   addAllowlistEntry,
   recordAllowlistUse,
+  resolveApprovalAuditCandidatePath,
   resolveAllowAlwaysPatterns,
   resolveExecApprovals,
   type ExecAllowlistEntry,
@@ -13,8 +14,15 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
+import {
+  describeInterpreterInlineEval,
+  detectInterpreterInlineEvalArgv,
+} from "../infra/exec-inline-eval.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
+import {
+  inspectHostExecEnvOverrides,
+  sanitizeSystemRunEnvOverrides,
+} from "../infra/host-env-security.js";
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
@@ -87,6 +95,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvals: ResolvedExecApprovals;
   security: ExecSecurity;
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
+  inlineEvalHit: ReturnType<typeof detectInterpreterInlineEvalArgv>;
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
   allowlistSatisfied: boolean;
@@ -241,6 +250,34 @@ async function parseSystemRunPhase(
   const sessionKey = opts.params.sessionKey?.trim() || "node";
   const runId = opts.params.runId?.trim() || crypto.randomUUID();
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
+  const envOverrideDiagnostics = inspectHostExecEnvOverrides({
+    overrides: opts.params.env ?? undefined,
+    blockPathOverrides: true,
+  });
+  if (
+    envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0 ||
+    envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0
+  ) {
+    const details: string[] = [];
+    if (envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
+      details.push(
+        `blocked override keys: ${envOverrideDiagnostics.rejectedOverrideBlockedKeys.join(", ")}`,
+      );
+    }
+    if (envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0) {
+      details.push(
+        `invalid non-portable override keys: ${envOverrideDiagnostics.rejectedOverrideInvalidKeys.join(", ")}`,
+      );
+    }
+    await opts.sendInvokeResult({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `SYSTEM_RUN_DENIED: environment override rejected (${details.join("; ")})`,
+      },
+    });
+    return null;
+  }
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellPayload !== null,
@@ -304,6 +341,15 @@ async function evaluateSystemRunPolicyPhase(
     skillBins: bins,
     autoAllowSkills,
   });
+  const strictInlineEval =
+    agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
+  const inlineEvalHit = strictInlineEval
+    ? (segments
+        .map((segment) =>
+          detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
+        )
+        .find((entry) => entry !== null) ?? null)
+    : null;
   const isWindows = process.platform === "win32";
   const cmdInvocation = parsed.shellPayload
     ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
@@ -325,6 +371,16 @@ async function evaluateSystemRunPolicyPhase(
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: policy.eventReason,
       message: policy.errorMessage,
+    });
+    return null;
+  }
+
+  if (inlineEvalHit && !policy.approvedByAsk) {
+    await sendSystemRunDenied(opts, parsed.execution, {
+      reason: "approval-required",
+      message:
+        `SYSTEM_RUN_DENIED: approval required (` +
+        `${describeInterpreterInlineEval(inlineEvalHit)} requires explicit approval in strictInlineEval mode)`,
     });
     return null;
   }
@@ -380,6 +436,7 @@ async function evaluateSystemRunPolicyPhase(
     approvals,
     security,
     policy,
+    inlineEvalHit,
     allowlistMatches,
     analysisOk,
     allowlistSatisfied,
@@ -461,7 +518,11 @@ async function executeSystemRunPhase(
     }
   }
 
-  if (phase.policy.approvalDecision === "allow-always" && phase.security === "allowlist") {
+  if (
+    phase.policy.approvalDecision === "allow-always" &&
+    phase.security === "allowlist" &&
+    phase.inlineEvalHit === null
+  ) {
     if (phase.policy.analysisOk) {
       const patterns = resolveAllowAlwaysPatterns({
         segments: phase.segments,
@@ -489,7 +550,7 @@ async function executeSystemRunPhase(
         phase.agentId,
         match,
         phase.commandText,
-        phase.segments[0]?.resolution?.resolvedPath,
+        resolveApprovalAuditCandidatePath(phase.segments[0]?.resolution ?? null, phase.cwd),
       );
     }
   }

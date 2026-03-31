@@ -1,47 +1,49 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  cacheSticker,
-  evictStaleEntries,
-  getAllCachedStickers,
-  getCachedSticker,
-  getCacheStats,
-  isSetIndexed,
-  markSetIndexed,
-  searchStickers,
-} from "./sticker-cache.js";
 
-// Mock the state directory to use a temp location
-vi.mock("../../../src/config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/paths.js")>();
-  return {
-    ...actual,
-    STATE_DIR: "/tmp/openclaw-test-sticker-cache",
-  };
-});
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  resolveApiKeyForProvider: vi.fn(),
+  findModelInCatalog: vi.fn(),
+  loadModelCatalog: vi.fn(async () => []),
+  modelSupportsVision: vi.fn(() => false),
+  resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.2" })),
+}));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  AUTO_IMAGE_KEY_PROVIDERS: ["openai"],
+  DEFAULT_IMAGE_MODELS: { openai: "gpt-4.1-mini" },
+  resolveAutoImageModel: vi.fn(async () => null),
+}));
+
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
+  describeImageFileWithModel: vi.fn(),
+}));
 
 const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
 const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
 
+type StickerCacheModule = typeof import("./sticker-cache.js");
+
+let stickerCache: StickerCacheModule;
+
 describe("sticker-cache", () => {
-  beforeEach(() => {
-    // Clean up before each test
-    if (fs.existsSync(TEST_CACHE_FILE)) {
-      fs.unlinkSync(TEST_CACHE_FILE);
-    }
+  beforeEach(async () => {
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-test-sticker-cache";
+    fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
+    fs.mkdirSync(TEST_CACHE_DIR, { recursive: true });
+    vi.resetModules();
+    stickerCache = await import("./sticker-cache.js");
   });
 
   afterEach(() => {
-    // Clean up after each test
-    if (fs.existsSync(TEST_CACHE_FILE)) {
-      fs.unlinkSync(TEST_CACHE_FILE);
-    }
+    fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
+    delete process.env.OPENCLAW_STATE_DIR;
   });
 
   describe("getCachedSticker", () => {
     it("returns null for unknown ID", () => {
-      const result = getCachedSticker("unknown-id");
+      const result = stickerCache.getCachedSticker("unknown-id");
       expect(result).toBeNull();
     });
 
@@ -55,8 +57,8 @@ describe("sticker-cache", () => {
         cachedAt: "2026-01-26T12:00:00.000Z",
       };
 
-      cacheSticker(sticker);
-      const result = getCachedSticker("unique123");
+      stickerCache.cacheSticker(sticker);
+      const result = stickerCache.getCachedSticker("unique123");
 
       expect(result).toEqual(sticker);
     });
@@ -69,13 +71,13 @@ describe("sticker-cache", () => {
         cachedAt: "2026-01-26T12:00:00.000Z",
       };
 
-      cacheSticker(sticker);
-      expect(getCachedSticker("unique123")).not.toBeNull();
+      stickerCache.cacheSticker(sticker);
+      expect(stickerCache.getCachedSticker("unique123")).not.toBeNull();
 
       // Manually clear the cache file
-      fs.unlinkSync(TEST_CACHE_FILE);
+      fs.rmSync(TEST_CACHE_FILE, { force: true });
 
-      expect(getCachedSticker("unique123")).toBeNull();
+      expect(stickerCache.getCachedSticker("unique123")).toBeNull();
     });
   });
 
@@ -88,9 +90,9 @@ describe("sticker-cache", () => {
         cachedAt: "2026-01-26T12:00:00.000Z",
       };
 
-      cacheSticker(sticker);
+      stickerCache.cacheSticker(sticker);
 
-      const all = getAllCachedStickers();
+      const all = stickerCache.getAllCachedStickers();
       expect(all).toHaveLength(1);
       expect(all[0]).toEqual(sticker);
     });
@@ -109,10 +111,10 @@ describe("sticker-cache", () => {
         cachedAt: "2026-01-26T13:00:00.000Z",
       };
 
-      cacheSticker(original);
-      cacheSticker(updated);
+      stickerCache.cacheSticker(original);
+      stickerCache.cacheSticker(updated);
 
-      const result = getCachedSticker("unique789");
+      const result = stickerCache.getCachedSticker("unique789");
       expect(result?.description).toBe("Updated description");
       expect(result?.fileId).toBe("file789-new");
     });
@@ -121,7 +123,7 @@ describe("sticker-cache", () => {
   describe("searchStickers", () => {
     beforeEach(() => {
       // Seed cache with test stickers
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "fox1",
         fileUniqueId: "fox-unique-1",
         emoji: "🦊",
@@ -129,7 +131,7 @@ describe("sticker-cache", () => {
         description: "A cute orange fox waving hello",
         cachedAt: "2026-01-26T10:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "fox2",
         fileUniqueId: "fox-unique-2",
         emoji: "🦊",
@@ -137,7 +139,7 @@ describe("sticker-cache", () => {
         description: "A fox sleeping peacefully",
         cachedAt: "2026-01-26T11:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "cat1",
         fileUniqueId: "cat-unique-1",
         emoji: "🐱",
@@ -145,7 +147,7 @@ describe("sticker-cache", () => {
         description: "A cat sitting on a keyboard",
         cachedAt: "2026-01-26T12:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "dog1",
         fileUniqueId: "dog-unique-1",
         emoji: "🐶",
@@ -156,47 +158,47 @@ describe("sticker-cache", () => {
     });
 
     it("finds stickers by description substring", () => {
-      const results = searchStickers("fox");
+      const results = stickerCache.searchStickers("fox");
       expect(results).toHaveLength(2);
       expect(results.every((s) => s.description.toLowerCase().includes("fox"))).toBe(true);
     });
 
     it("finds stickers by emoji", () => {
-      const results = searchStickers("🦊");
+      const results = stickerCache.searchStickers("🦊");
       expect(results).toHaveLength(2);
       expect(results.every((s) => s.emoji === "🦊")).toBe(true);
     });
 
     it("finds stickers by set name", () => {
-      const results = searchStickers("CuteFoxes");
+      const results = stickerCache.searchStickers("CuteFoxes");
       expect(results).toHaveLength(2);
       expect(results.every((s) => s.setName === "CuteFoxes")).toBe(true);
     });
 
     it("respects limit parameter", () => {
-      const results = searchStickers("fox", 1);
+      const results = stickerCache.searchStickers("fox", 1);
       expect(results).toHaveLength(1);
     });
 
     it("ranks exact matches higher", () => {
       // "waving" appears in "fox waving hello" - should be ranked first
-      const results = searchStickers("waving");
+      const results = stickerCache.searchStickers("waving");
       expect(results).toHaveLength(1);
       expect(results[0]?.fileUniqueId).toBe("fox-unique-1");
     });
 
     it("returns empty array for no matches", () => {
-      const results = searchStickers("elephant");
+      const results = stickerCache.searchStickers("elephant");
       expect(results).toHaveLength(0);
     });
 
     it("is case insensitive", () => {
-      const results = searchStickers("FOX");
+      const results = stickerCache.searchStickers("FOX");
       expect(results).toHaveLength(2);
     });
 
     it("matches multiple words", () => {
-      const results = searchStickers("cat keyboard");
+      const results = stickerCache.searchStickers("cat keyboard");
       expect(results).toHaveLength(1);
       expect(results[0]?.fileUniqueId).toBe("cat-unique-1");
     });
@@ -204,159 +206,61 @@ describe("sticker-cache", () => {
 
   describe("getAllCachedStickers", () => {
     it("returns empty array when cache is empty", () => {
-      const result = getAllCachedStickers();
+      const result = stickerCache.getAllCachedStickers();
       expect(result).toEqual([]);
     });
 
     it("returns all cached stickers", () => {
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "a",
         fileUniqueId: "a-unique",
         description: "Sticker A",
         cachedAt: "2026-01-26T10:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "b",
         fileUniqueId: "b-unique",
         description: "Sticker B",
         cachedAt: "2026-01-26T11:00:00.000Z",
       });
 
-      const result = getAllCachedStickers();
+      const result = stickerCache.getAllCachedStickers();
       expect(result).toHaveLength(2);
-    });
-  });
-
-  describe("describeStickerImage contentType", () => {
-    it("uses provided contentType for MIME and filename extension", async () => {
-      // This is a unit test for the interface — the actual vision call is mocked.
-      // We verify that the params interface accepts contentType.
-      const { describeStickerImage } = await import("./sticker-cache.js");
-      expect(typeof describeStickerImage).toBe("function");
-    });
-  });
-
-  describe("isSetIndexed / markSetIndexed", () => {
-    it("returns false for unknown set", () => {
-      expect(isSetIndexed("UnknownSet")).toBe(false);
-    });
-
-    it("returns true after markSetIndexed", () => {
-      markSetIndexed("TestPack", {
-        indexedAt: "2026-02-01T12:00:00.000Z",
-        stickerCount: 30,
-        title: "Test Pack",
-      });
-      expect(isSetIndexed("TestPack")).toBe(true);
-    });
-
-    it("subsequent calls to markSetIndexed update info", () => {
-      markSetIndexed("PackA", {
-        indexedAt: "2026-02-01T12:00:00.000Z",
-        stickerCount: 10,
-        title: "Pack A",
-      });
-      markSetIndexed("PackA", {
-        indexedAt: "2026-02-02T12:00:00.000Z",
-        stickerCount: 15,
-        title: "Pack A v2",
-      });
-      expect(isSetIndexed("PackA")).toBe(true);
     });
   });
 
   describe("getCacheStats", () => {
     it("returns count 0 when cache is empty", () => {
-      const stats = getCacheStats();
+      const stats = stickerCache.getCacheStats();
       expect(stats.count).toBe(0);
       expect(stats.oldestAt).toBeUndefined();
       expect(stats.newestAt).toBeUndefined();
     });
 
     it("returns correct stats with cached stickers", () => {
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "old",
         fileUniqueId: "old-unique",
         description: "Old sticker",
         cachedAt: "2026-01-20T10:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "new",
         fileUniqueId: "new-unique",
         description: "New sticker",
         cachedAt: "2026-01-26T10:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "mid",
         fileUniqueId: "mid-unique",
         description: "Middle sticker",
         cachedAt: "2026-01-23T10:00:00.000Z",
       });
 
-      const stats = getCacheStats();
+      const stats = stickerCache.getCacheStats();
       expect(stats.count).toBe(3);
       expect(stats.oldestAt).toBe("2026-01-20T10:00:00.000Z");
       expect(stats.newestAt).toBe("2026-01-26T10:00:00.000Z");
-    });
-  });
-
-  describe("evictStaleEntries", () => {
-    it("removes entries older than TTL", () => {
-      const now = new Date();
-      const old = new Date(now.getTime() - 100 * 24 * 60 * 60 * 1000); // 100 days ago
-      const recent = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000); // 10 days ago
-
-      cacheSticker({
-        fileId: "old1",
-        fileUniqueId: "old1-unique",
-        description: "Old sticker",
-        cachedAt: old.toISOString(),
-      });
-      cacheSticker({
-        fileId: "recent1",
-        fileUniqueId: "recent1-unique",
-        description: "Recent sticker",
-        cachedAt: recent.toISOString(),
-      });
-
-      const removed = evictStaleEntries({ ttlDays: 90 });
-      expect(removed).toBe(1);
-      expect(getCachedSticker("old1-unique")).toBeNull();
-      expect(getCachedSticker("recent1-unique")).not.toBeNull();
-    });
-
-    it("removes oldest entries when over maxEntries", () => {
-      // Create 5 entries
-      for (let i = 0; i < 5; i++) {
-        cacheSticker({
-          fileId: `file${i}`,
-          fileUniqueId: `unique${i}`,
-          description: `Sticker ${i}`,
-          cachedAt: new Date(Date.now() - (5 - i) * 60 * 1000).toISOString(), // progressively newer
-        });
-      }
-
-      expect(getAllCachedStickers()).toHaveLength(5);
-      const removed = evictStaleEntries({ ttlDays: 9999, maxEntries: 3 });
-      expect(removed).toBe(2);
-      expect(getAllCachedStickers()).toHaveLength(3);
-      // Oldest (unique0, unique1) should be removed
-      expect(getCachedSticker("unique0")).toBeNull();
-      expect(getCachedSticker("unique1")).toBeNull();
-      expect(getCachedSticker("unique4")).not.toBeNull();
-    });
-
-    it("does nothing when cache is within limits", () => {
-      cacheSticker({
-        fileId: "a",
-        fileUniqueId: "a-unique",
-        description: "Sticker A",
-        cachedAt: new Date().toISOString(),
-      });
-
-      const removed = evictStaleEntries({ ttlDays: 90, maxEntries: 5000 });
-      expect(removed).toBe(0);
-      expect(getCachedSticker("a-unique")).not.toBeNull();
     });
   });
 });

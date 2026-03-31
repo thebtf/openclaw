@@ -8,7 +8,10 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
+import type { SessionsPatchParams } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
@@ -156,34 +159,16 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
   context: MessagePreprocessedHookContext;
 };
 
-// ============================================================================
-// Message Prefilter Hook Event
-//
-// Fires when a group message would be dropped by the mention gate
-// (requireMention: true, no @mention, no reply-to-bot).
-// Hooks can leave event unmodified to forward the message to the agent,
-// or set event.cancelled = true to drop it.
-// ============================================================================
-
-export type MessagePrefilterHookContext = {
-  /** Provider account ID (e.g. "jeeves") */
-  accountId: string;
-  /** Channel identifier (e.g. "telegram") */
-  channel: string;
-  /** Conversation/chat ID */
-  chatId: string;
-  /** Raw message text */
-  text: string;
-  /** Message ID from the provider */
-  messageId: string;
-  /** Sender identifier */
-  senderId?: string;
+export type SessionPatchHookContext = {
+  sessionEntry: SessionEntry;
+  patch: SessionsPatchParams;
+  cfg: OpenClawConfig;
 };
 
-export type MessagePrefilterHookEvent = InternalHookEvent & {
-  type: "message";
-  action: "prefilter";
-  context: MessagePrefilterHookContext;
+export type SessionPatchHookEvent = InternalHookEvent & {
+  type: "session";
+  action: "patch";
+  context: SessionPatchHookContext;
 };
 
 export interface InternalHookEvent {
@@ -199,14 +184,6 @@ export interface InternalHookEvent {
   timestamp: Date;
   /** Messages to send back to the user (hooks can push to this array) */
   messages: string[];
-  /**
-   * Set by a handler to signal that the caller should skip further processing.
-   * All handlers still run (error isolation preserved). Caller checks this after
-   * triggerInternalHook returns.
-   */
-  cancelled?: boolean;
-  /** Human-readable reason for cancellation, set alongside cancelled */
-  cancelReason?: string;
 }
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
@@ -221,13 +198,11 @@ export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | 
  * are invisible to triggerInternalHook in another chunk, causing hooks
  * to silently fire with zero handlers.
  */
-const _g = globalThis as typeof globalThis & {
-  __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
-};
-const handlers = (_g.__openclaw_internal_hook_handlers__ ??= new Map<
-  string,
-  InternalHookHandler[]
->());
+const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
+const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
+  INTERNAL_HOOK_HANDLERS_KEY,
+  () => new Map<string, InternalHookHandler[]>(),
+);
 const log = createSubsystemLogger("internal-hooks");
 
 /**
@@ -293,16 +268,10 @@ export function getRegisteredEventKeys(): string[] {
   return Array.from(handlers.keys());
 }
 
-/**
- * Check if any listeners are registered for the given event key.
- * Supports both general type keys (e.g., "message") and specific type:action
- * keys (e.g., "message:prefilter").
- */
-export function hasInternalHookListeners(eventKey: string): boolean {
-  const [type, action] = eventKey.includes(":") ? eventKey.split(":", 2) : [eventKey, undefined];
-  const typeCount = handlers.get(type ?? eventKey)?.length ?? 0;
-  const specificCount = action ? (handlers.get(eventKey)?.length ?? 0) : 0;
-  return typeCount + specificCount > 0;
+export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
+  return (
+    (handlers.get(type)?.length ?? 0) > 0 || (handlers.get(`${type}:${action}`)?.length ?? 0) > 0
+  );
 }
 
 /**
@@ -318,14 +287,13 @@ export function hasInternalHookListeners(eventKey: string): boolean {
  * @param event - The event to trigger
  */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
-  const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
-
-  const allHandlers = [...typeHandlers, ...specificHandlers];
-
-  if (allHandlers.length === 0) {
+  if (!hasInternalHookListeners(event.type, event.action)) {
     return;
   }
+
+  const typeHandlers = handlers.get(event.type) ?? [];
+  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
 
   for (const handler of allHandlers) {
     try {
@@ -359,14 +327,6 @@ export function createInternalHookEvent(
     timestamp: new Date(),
     messages: [],
   };
-}
-
-/**
- * Check if a hook event has been cancelled by a handler.
- * Use after triggerInternalHook to decide whether to skip further processing.
- */
-export function isCancelledEvent(event: InternalHookEvent): boolean {
-  return Boolean(event.cancelled);
 }
 
 function isHookEventTypeAndAction(
@@ -435,12 +395,6 @@ export function isMessageReceivedEvent(
   return hasStringContextField(context, "from") && hasStringContextField(context, "channelId");
 }
 
-export function isMessagePrefilterEvent(
-  event: InternalHookEvent,
-): event is MessagePrefilterHookEvent {
-  return event.type === "message" && event.action === "prefilter";
-}
-
 export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
   if (!isHookEventTypeAndAction(event, "message", "sent")) {
     return false;
@@ -482,4 +436,22 @@ export function isMessagePreprocessedEvent(
     return false;
   }
   return hasStringContextField(context, "channelId");
+}
+
+export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {
+  if (!isHookEventTypeAndAction(event, "session", "patch")) {
+    return false;
+  }
+  const context = getHookContext<SessionPatchHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    typeof context.patch === "object" &&
+    context.patch !== null &&
+    typeof context.cfg === "object" &&
+    context.cfg !== null &&
+    typeof context.sessionEntry === "object" &&
+    context.sessionEntry !== null
+  );
 }
