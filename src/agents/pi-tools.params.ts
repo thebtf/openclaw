@@ -231,8 +231,15 @@ export function assertRequiredParams(
     throw parameterValidationError(`Missing parameters for ${toolName}`);
   }
 
+  // After normalizeToolParams, flat oldText/newText are wrapped into edits[].
+  // Skip oldText/newText assertion when edits array is present.
+  const hasEditsArray = Array.isArray(record.edits) && record.edits.length > 0;
+
   const missingLabels: string[] = [];
   for (const group of groups) {
+    if (hasEditsArray && group.keys.some((k) => k === "oldText" || k === "newText")) {
+      continue;
+    }
     const satisfied = group.keys.some((key) => {
       if (!(key in record)) {
         return false;
