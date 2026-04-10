@@ -12,6 +12,8 @@ minimumReleaseAgeExclude:
   - "hono"
   - "openclaw"
   - "@buape/carbon"
+  - "discord-api-types"
+  - "@types/node"
   - "vite"
   - "@cloudflare/workers-types"
   - "@hono/node-server"
