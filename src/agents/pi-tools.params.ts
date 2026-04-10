@@ -4,6 +4,7 @@ export type RequiredParamGroup = {
   keys: readonly string[];
   allowEmpty?: boolean;
   label?: string;
+  validator?: (record: Record<string, unknown>) => boolean;
 };
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
@@ -12,25 +13,82 @@ function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
 }
 
-export const CLAUDE_PARAM_GROUPS = {
-  read: [{ keys: ["path", "file_path", "filePath", "file"], label: "path alias" }],
+function describeReceivedParamValue(value: unknown, allowEmpty = false): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    if (allowEmpty || value.trim().length > 0) {
+      return undefined;
+    }
+    return "<empty-string>";
+  }
+  if (Array.isArray(value)) {
+    return "<array>";
+  }
+  return `<${typeof value}>`;
+}
+
+function formatReceivedParamHint(
+  record: Record<string, unknown>,
+  groups: readonly RequiredParamGroup[],
+): string {
+  const allowEmptyKeys = new Set(
+    groups.filter((group) => group.allowEmpty).flatMap((group) => group.keys),
+  );
+  const received = Object.keys(record).flatMap((key) => {
+    const detail = describeReceivedParamValue(record[key], allowEmptyKeys.has(key));
+    if (record[key] === undefined || record[key] === null) {
+      return [];
+    }
+    return [detail ? `${key}=${detail}` : key];
+  });
+  return received.length > 0 ? ` (received: ${received.join(", ")})` : "";
+}
+
+type EditReplacement = {
+  oldText: string;
+  newText: string;
+};
+
+function isValidEditReplacement(value: unknown): value is EditReplacement {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.oldText === "string" &&
+    record.oldText.trim().length > 0 &&
+    typeof record.newText === "string"
+  );
+}
+
+function hasValidEditReplacements(record: Record<string, unknown>): boolean {
+  const edits = record.edits;
+  return (
+    Array.isArray(edits) &&
+    edits.length > 0 &&
+    edits.every((entry) => isValidEditReplacement(entry))
+  );
+}
+
+export const REQUIRED_PARAM_GROUPS = {
+  read: [{ keys: ["path"], label: "path" }],
   write: [
-    { keys: ["path", "file_path", "filePath", "file"], label: "path alias" },
+    { keys: ["path"], label: "path" },
     { keys: ["content"], label: "content" },
   ],
   edit: [
-    { keys: ["path", "file_path", "filePath", "file"], label: "path alias" },
-    {
-      keys: ["oldText", "old_string", "old_text", "oldString"],
-      label: "oldText alias",
-    },
-    {
-      keys: ["newText", "new_string", "new_text", "newString"],
-      label: "newText alias",
-      allowEmpty: true,
-    },
+    { keys: ["path"], label: "path" },
+    { keys: ["edits"], label: "edits", validator: hasValidEditReplacements },
   ],
 } as const;
+
+// ========== FORK PATCH: Claude Code param compatibility ==========
+// 3rd party models (GPT-5, Qwen via litellm/unleashed) are trained on Claude Code conventions
+// and emit flat { file_path, old_string, new_string } instead of pi-coding-agent's
+// nested { path, edits: [{ oldText, newText }] }. We normalize before validation so both
+// schemas work without retraining the models.
 
 type ClaudeParamAlias = {
   original: string;
@@ -130,32 +188,32 @@ function addClaudeParamAliasesToSchema(params: {
   return changed;
 }
 
-// Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
-// Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
-// This prevents models trained on Claude Code from getting stuck in tool-call loops.
+/**
+ * Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
+ * Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
+ * Also wraps flat edit params into the nested edits[] array structure.
+ */
 export function normalizeToolParams(params: unknown): Record<string, unknown> | undefined {
   if (!params || typeof params !== "object") {
     return undefined;
   }
   const record = params as Record<string, unknown>;
-  const normalized = { ...record };
+  const normalized: Record<string, unknown> = { ...record };
   normalizeClaudeParamAliases(normalized);
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
-  // Normalize these for write/edit so content matching and writes stay deterministic.
   normalizeTextLikeParam(normalized, "content");
   normalizeTextLikeParam(normalized, "oldText");
   normalizeTextLikeParam(normalized, "newText");
 
   // pi-coding-agent edit tool expects { path, edits: [{ oldText, newText }] }.
   // Models trained on Claude Code emit flat { path, oldText, newText } instead.
-  // Wrap flat params into the edits array so schema validation passes.
+  // Wrap flat params into the edits array so validation passes.
   if (
     "oldText" in normalized &&
     typeof normalized.oldText === "string" &&
     !("edits" in normalized)
   ) {
-    const newText =
-      typeof normalized.newText === "string" ? normalized.newText : "";
+    const newText = typeof normalized.newText === "string" ? normalized.newText : "";
     normalized.edits = [{ oldText: normalized.oldText, newText }];
     delete normalized.oldText;
     delete normalized.newText;
@@ -164,6 +222,11 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   return normalized;
 }
 
+/**
+ * Relax a tool's JSON schema to accept Claude Code alias properties at the root level.
+ * Used to prevent AJV validation in pi-agent-core from rejecting flat edit params
+ * before our normalizeToolParams wrapper can reshape the input.
+ */
 export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAgentTool {
   const schema =
     tool.parameters && typeof tool.parameters === "object"
@@ -180,28 +243,28 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
     : [];
   const changed = addClaudeParamAliasesToSchema({ properties, required });
 
-  // pi-coding-agent edit tool uses { path, edits: [{ oldText, newText }] } with
-  // additionalProperties: false. Models trained on Claude Code emit flat { path, oldText, newText }.
-  // Relax the schema: add flat aliases and allow additional properties so AJV doesn't reject
-  // before our normalizeToolParams wrapper can reshape the input.
+  // Edit tool special case: allow flat oldText/newText at root level, make edits optional.
   if (tool.name === "edit" && "edits" in properties) {
-    // Allow flat oldText/newText/old_string/new_string at root level
     if (!("oldText" in properties)) {
-      properties.oldText = { type: "string", description: "Alias for edits[0].oldText (Claude Code compat)" };
+      properties.oldText = {
+        type: "string",
+        description: "Alias for edits[0].oldText (Claude Code compat)",
+      };
     }
     if (!("newText" in properties)) {
-      properties.newText = { type: "string", description: "Alias for edits[0].newText (Claude Code compat)" };
+      properties.newText = {
+        type: "string",
+        description: "Alias for edits[0].newText (Claude Code compat)",
+      };
     }
-    // Make edits optional (flat params are the alternative)
     const editsIdx = required.indexOf("edits");
     if (editsIdx !== -1) {
       required.splice(editsIdx, 1);
     }
   }
 
-  // For edit tools with additionalProperties: false, relax to allow alias properties
-  const dropAdditionalProps =
-    tool.name === "edit" && schema.additionalProperties === false;
+  // Drop additionalProperties:false for edit tool so alias properties pass AJV.
+  const dropAdditionalProps = tool.name === "edit" && schema.additionalProperties === false;
 
   if (!changed && !dropAdditionalProps) {
     return tool;
@@ -222,6 +285,12 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
   };
 }
 
+// ========== END FORK PATCH ==========
+
+export function getToolParamsRecord(params: unknown): Record<string, unknown> | undefined {
+  return params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
+}
+
 export function assertRequiredParams(
   record: Record<string, unknown> | undefined,
   groups: readonly RequiredParamGroup[],
@@ -231,28 +300,23 @@ export function assertRequiredParams(
     throw parameterValidationError(`Missing parameters for ${toolName}`);
   }
 
-  // After normalizeToolParams, flat oldText/newText are wrapped into edits[].
-  // Skip oldText/newText assertion when edits array is present.
-  const hasEditsArray = Array.isArray(record.edits) && record.edits.length > 0;
-
   const missingLabels: string[] = [];
   for (const group of groups) {
-    if (hasEditsArray && group.keys.some((k) => k === "oldText" || k === "newText")) {
-      continue;
-    }
-    const satisfied = group.keys.some((key) => {
-      if (!(key in record)) {
-        return false;
-      }
-      const value = record[key];
-      if (typeof value !== "string") {
-        return false;
-      }
-      if (group.allowEmpty) {
-        return true;
-      }
-      return value.trim().length > 0;
-    });
+    const satisfied =
+      group.validator?.(record) ??
+      group.keys.some((key) => {
+        if (!(key in record)) {
+          return false;
+        }
+        const value = record[key];
+        if (typeof value !== "string") {
+          return false;
+        }
+        if (group.allowEmpty) {
+          return true;
+        }
+        return value.trim().length > 0;
+      });
 
     if (!satisfied) {
       const label = group.label ?? group.keys.join(" or ");
@@ -263,25 +327,24 @@ export function assertRequiredParams(
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");
     const noun = missingLabels.length === 1 ? "parameter" : "parameters";
-    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
+    const receivedHint = formatReceivedParamHint(record, groups);
+    throw parameterValidationError(`Missing required ${noun}: ${joined}${receivedHint}`);
   }
 }
 
-// Generic wrapper to normalize parameters for any tool.
-export function wrapToolParamNormalization(
+export function wrapToolParamValidation(
   tool: AnyAgentTool,
   requiredParamGroups?: readonly RequiredParamGroup[],
 ): AnyAgentTool {
+  // Fork patch: relax schema to accept Claude Code alias properties.
   const patched = patchToolSchemaForClaudeCompatibility(tool);
   return {
     ...patched,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const normalized = normalizeToolParams(params);
-      const record =
-        normalized ??
-        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+      // Fork patch: normalize flat Claude Code params to pi-coding-agent shape before validation.
+      const normalized = normalizeToolParams(params) ?? getToolParamsRecord(params);
       if (requiredParamGroups?.length) {
-        assertRequiredParams(record, requiredParamGroups, tool.name);
+        assertRequiredParams(normalized, requiredParamGroups, tool.name);
       }
       return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
     },

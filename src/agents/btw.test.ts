@@ -16,8 +16,9 @@ const resolveSessionAuthProfileOverrideMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const diagDebugMock = vi.fn();
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -72,7 +73,7 @@ const { runBtwSideQuestion } = await import("./btw.js");
 type RunBtwSideQuestionParams = Parameters<typeof runBtwSideQuestion>[0];
 
 const DEFAULT_AGENT_DIR = "/tmp/agent";
-const DEFAULT_MODEL = "claude-sonnet-4-5";
+const DEFAULT_MODEL = "claude-sonnet-4-6";
 const DEFAULT_PROVIDER = "anthropic";
 const DEFAULT_REASONING_LEVEL = "off";
 const DEFAULT_SESSION_KEY = "agent:main:main";
@@ -201,7 +202,7 @@ describe("runBtwSideQuestion", () => {
     getLeafEntryMock.mockReturnValue(null);
     resolveModelWithRegistryMock.mockReturnValue({
       provider: "anthropic",
-      id: "claude-sonnet-4-5",
+      id: "claude-sonnet-4-6",
       api: "anthropic-messages",
     });
     getApiKeyForModelMock.mockResolvedValue({ apiKey: "secret", mode: "api-key", source: "test" });
@@ -221,7 +222,7 @@ describe("runBtwSideQuestion", () => {
             role: "assistant",
             content: [],
             provider: "anthropic",
-            model: "claude-sonnet-4-5",
+            model: "claude-sonnet-4-6",
           },
         },
         {
@@ -232,7 +233,7 @@ describe("runBtwSideQuestion", () => {
             role: "assistant",
             content: [],
             provider: "anthropic",
-            model: "claude-sonnet-4-5",
+            model: "claude-sonnet-4-6",
           },
         },
         {
@@ -243,7 +244,7 @@ describe("runBtwSideQuestion", () => {
             content: [{ type: "text", text: "Side answer." }],
             provider: "anthropic",
             api: "anthropic-messages",
-            model: "claude-sonnet-4-5",
+            model: "claude-sonnet-4-6",
             stopReason: "stop",
             usage: {
               input: 1,
@@ -294,6 +295,52 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
+  });
+
+  it("strips injected empty tools arrays from BTW payloads before sending", async () => {
+    mockDoneAnswer("Final answer.");
+
+    await runSideQuestion();
+
+    const [, , options] = streamSimpleMock.mock.calls[0] ?? [];
+    const onPayload = (options as { onPayload?: (payload: unknown) => void })?.onPayload;
+    const payloadWithEmptyTools = { messages: [], tools: [] as unknown[] };
+
+    const result = onPayload?.(payloadWithEmptyTools);
+
+    expect(payloadWithEmptyTools).not.toHaveProperty("tools");
+    expect(result).toBeUndefined();
+  });
+
+  it("allows Bedrock /btw runs to proceed without a static api key in aws-sdk mode", async () => {
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "amazon-bedrock",
+      id: "us.anthropic.claude-sonnet-4-5-v1:0",
+      api: "anthropic-messages",
+    });
+    getApiKeyForModelMock.mockResolvedValue({
+      apiKey: undefined,
+      mode: "aws-sdk",
+      source: "aws-sdk default chain",
+    });
+    streamSimpleMock.mockReturnValue(makeAsyncEvents([createDoneEvent("Bedrock answer.")]));
+
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: DEFAULT_AGENT_DIR,
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-5-v1:0",
+      question: DEFAULT_QUESTION,
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
+      opts: {},
+      isNewSession: false,
+    });
+
+    expect(result).toEqual({ text: "Bedrock answer." });
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    const [, , options] = streamSimpleMock.mock.calls.at(-1) ?? [];
+    expect((options as { apiKey?: string } | undefined)?.apiKey).toBeUndefined();
   });
 
   it("forces provider reasoning off even when the session think level is adaptive", async () => {
