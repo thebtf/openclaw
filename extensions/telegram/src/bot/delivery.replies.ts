@@ -603,8 +603,6 @@ export async function deliverReplies(params: {
   silent?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
-  /** message_id of the incoming message to reply to when the agent initiates (no reply chain). */
-  incomingMessageId?: number;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
 }): Promise<{ delivered: boolean }> {
@@ -670,9 +668,7 @@ export async function deliverReplies(params: {
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const replyToId =
-        params.replyToMode === "off"
-          ? undefined
-          : resolveTelegramReplyId(reply.replyToId) ?? params.incomingMessageId;
+        params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);

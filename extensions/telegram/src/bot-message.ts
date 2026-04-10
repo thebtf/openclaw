@@ -1,11 +1,5 @@
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  createInternalHookEvent,
-  hasInternalHookListeners,
-  isCancelledEvent,
-  triggerInternalHook,
-} from "openclaw/plugin-sdk/hook-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -113,31 +107,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           (options?.ingressBuffer ? ` buffer=${String(options.ingressBuffer)}` : ""),
       );
     }
-    // Fire message:received hook — allows hooks (e.g. group-secretary) to cancel dispatch
-    if (hasInternalHookListeners("message", "received")) {
-      const hookEvent = createInternalHookEvent("message", "received", context.sessionKey ?? "", {
-        channel: "telegram",
-        accountId: account,
-        chatId: context.chatId,
-        text: context.body ?? "",
-        messageId: String(primaryCtx.message.message_id),
-        senderId: String(primaryCtx.message.from?.id ?? ""),
-        isGroup: context.isGroup,
-      });
-      try {
-        await triggerInternalHook(hookEvent);
-      } catch (err) {
-        logger.info({ error: err }, "message:received hook failed, continuing dispatch");
-      }
-      if (isCancelledEvent(hookEvent)) {
-        logger.info(
-          { chatId: context.chatId, reason: hookEvent.cancelReason },
-          "message:received hook cancelled dispatch",
-        );
-        return;
-      }
-    }
-
     try {
       await dispatchTelegramMessage({
         context,

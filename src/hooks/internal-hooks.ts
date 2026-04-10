@@ -185,15 +185,6 @@ export interface InternalHookEvent {
   timestamp: Date;
   /** Messages to send back to the user (hooks can push to this array) */
   messages: string[];
-  /** If true, the event's associated action should be cancelled (e.g., drop an incoming message). */
-  cancelled?: boolean;
-  /** Human-readable reason for cancellation (set by hook handler). */
-  cancelReason?: string;
-}
-
-/** Check whether a hook handler cancelled the event. */
-export function isCancelledEvent(event: InternalHookEvent): boolean {
-  return event.cancelled === true;
 }
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;

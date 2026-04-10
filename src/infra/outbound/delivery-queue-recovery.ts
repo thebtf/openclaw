@@ -58,10 +58,6 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
   /ambiguous .* recipient/i,
   /User .* not in room/i,
-  /message is too long/i,
-  /text is too long/i,
-  /request entity too large/i,
-  /OVERSIZED_MESSAGE/i,
 ];
 
 const drainInProgress = new Map<string, boolean>();

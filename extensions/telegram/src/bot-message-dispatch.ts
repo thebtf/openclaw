@@ -480,7 +480,6 @@ export const dispatchTelegramMessage = async ({
     chunkMode,
     linkPreview: telegramCfg.linkPreview,
     replyQuoteText,
-    incomingMessageId: typeof msg.message_id === "number" ? msg.message_id : undefined,
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload => {

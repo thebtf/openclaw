@@ -106,17 +106,7 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
     return undefined;
   }
 
-  return `⚠️ ${redactProviderModelNames(trimmed)}`;
-}
-
-/**
- * Remove provider/model identifiers from user-facing error messages.
- * Prevents leaking internal model routing details to end users.
- */
-function redactProviderModelNames(text: string): string {
-  // Redact unleashed-*/provider/model patterns
-  return text.replace(/unleashed-(?:openai|google|anthropic|agm)\/[^\s,)}\]]+/gi, "[model]")
-    .replace(/(?:openai|anthropic|google|gemini|gpt-\d|claude-\d)[^\s,)}\]]*/gi, "[model]");
+  return `⚠️ ${trimmed}`;
 }
 
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
@@ -772,10 +762,6 @@ function classifyFailoverClassificationFromMessage(
   if (isCloudCodeAssistFormatError(raw)) {
     return toReasonClassification("format");
   }
-  if (isGeminiInvalidArgumentError(raw)) {
-    // Fork patch: retry Gemini INVALID_ARGUMENT — often transient.
-    return toReasonClassification("timeout");
-  }
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
@@ -1291,11 +1277,6 @@ export function classifyFailoverReason(
       provider: opts?.provider,
     }),
   );
-}
-
-/** Detect Gemini INVALID_ARGUMENT errors that should be retried (often transient). */
-export function isGeminiInvalidArgumentError(raw: string): boolean {
-  return /INVALID_ARGUMENT/i.test(raw) || /400.*invalid argument/i.test(raw);
 }
 
 export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }): boolean {
