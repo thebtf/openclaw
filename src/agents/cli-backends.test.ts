@@ -1,13 +1,22 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import type { CliBundleMcpMode } from "../plugins/types.js";
+import {
+  __testing as cliBackendsTesting,
+  resolveCliBackendConfig,
+  resolveCliBackendLiveTest,
+} from "./cli-backends.js";
 
-let createEmptyPluginRegistry: typeof import("../plugins/registry.js").createEmptyPluginRegistry;
-let resetPluginRuntimeStateForTest: typeof import("../plugins/runtime.js").resetPluginRuntimeStateForTest;
-let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
-let resolveCliBackendConfig: typeof import("./cli-backends.js").resolveCliBackendConfig;
-let resolveCliBackendLiveTest: typeof import("./cli-backends.js").resolveCliBackendLiveTest;
+type RuntimeBackendEntry = ReturnType<
+  (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
+>[number];
+type SetupBackendEntry = NonNullable<
+  ReturnType<(typeof import("../plugins/setup-registry.js"))["resolvePluginSetupCliBackend"]>
+>;
+
+let runtimeBackendEntries: RuntimeBackendEntry[] = [];
+let setupBackendEntries: SetupBackendEntry[] = [];
 
 function createBackendEntry(params: {
   pluginId: string;
@@ -58,6 +67,14 @@ function createBackendEntry(params: {
       },
     },
   };
+}
+
+function createRuntimeBackendEntry(params: Parameters<typeof createBackendEntry>[0]) {
+  const entry = createBackendEntry(params);
+  return {
+    ...entry.backend,
+    pluginId: entry.pluginId,
+  } satisfies RuntimeBackendEntry;
 }
 
 function createClaudeCliOverrideConfig(config: CliBackendConfig): OpenClawConfig {
@@ -149,24 +166,13 @@ function normalizeTestClaudeBackendConfig(config: CliBackendConfig): CliBackendC
   };
 }
 
-beforeAll(async () => {
-  vi.doUnmock("../plugins/setup-registry.js");
-  vi.doUnmock("../plugins/cli-backends.runtime.js");
-  vi.resetModules();
-  ({ createEmptyPluginRegistry } = await import("../plugins/registry.js"));
-  ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
-    await import("../plugins/runtime.js"));
-  ({ resolveCliBackendConfig, resolveCliBackendLiveTest } = await import("./cli-backends.js"));
-});
-
 afterEach(() => {
-  resetPluginRuntimeStateForTest();
+  cliBackendsTesting.resetDepsForTest();
 });
 
 beforeEach(() => {
-  const registry = createEmptyPluginRegistry();
-  registry.cliBackends = [
-    createBackendEntry({
+  runtimeBackendEntries = [
+    createRuntimeBackendEntry({
       pluginId: "anthropic",
       id: "claude-cli",
       bundleMcp: true,
@@ -222,7 +228,7 @@ beforeEach(() => {
       },
       normalizeConfig: normalizeTestClaudeBackendConfig,
     }),
-    createBackendEntry({
+    createRuntimeBackendEntry({
       pluginId: "openai",
       id: "codex-cli",
       bundleMcp: true,
@@ -238,7 +244,14 @@ beforeEach(() => {
           "workspace-write",
           "--skip-git-repo-check",
         ],
-        resumeArgs: ["exec", "resume", "{sessionId}", "--dangerously-bypass-approvals-and-sandbox"],
+        resumeArgs: [
+          "exec",
+          "resume",
+          "{sessionId}",
+          "-c",
+          'sandbox_mode="workspace-write"',
+          "--skip-git-repo-check",
+        ],
         systemPromptFileConfigArg: "-c",
         systemPromptFileConfigKey: "model_instructions_file",
         systemPromptWhen: "first",
@@ -258,7 +271,7 @@ beforeEach(() => {
         },
       },
     }),
-    createBackendEntry({
+    createRuntimeBackendEntry({
       pluginId: "google",
       id: "google-gemini-cli",
       bundleMcp: true,
@@ -276,11 +289,34 @@ beforeEach(() => {
       },
     }),
   ];
-  setActivePluginRegistry(registry);
+  const claudeBackend = runtimeBackendEntries.find((entry) => entry.id === "claude-cli");
+  setupBackendEntries = claudeBackend
+    ? [
+        {
+          pluginId: claudeBackend.pluginId,
+          backend: {
+            ...claudeBackend,
+            config: {
+              ...claudeBackend.config,
+              sessionArg: "--session-id",
+              sessionMode: "always",
+              systemPromptArg: "--append-system-prompt",
+              systemPromptWhen: "first",
+            },
+          },
+        },
+      ]
+    : [];
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => runtimeBackendEntries,
+    resolvePluginSetupCliBackend: ({ backend }) => {
+      return setupBackendEntries.find((entry) => entry.backend.id === backend);
+    },
+  });
 });
 
 describe("resolveCliBackendConfig reliability merge", () => {
-  it("defaults codex-cli to workspace-write for fresh and resume runs", () => {
+  it("defaults codex-cli fresh sandboxing and config-pinned resume sandboxing", () => {
     const resolved = resolveCliBackendConfig("codex-cli");
 
     expect(resolved).not.toBeNull();
@@ -297,7 +333,9 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "exec",
       "resume",
       "{sessionId}",
-      "--dangerously-bypass-approvals-and-sandbox",
+      "-c",
+      'sandbox_mode="workspace-write"',
+      "--skip-git-repo-check",
     ]);
   });
 
@@ -648,8 +686,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
   });
 
   it("normalizes override-only claude-cli config when the plugin registry is absent", () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
+    runtimeBackendEntries = [];
 
     const cfg = {
       agents: {
@@ -735,9 +772,8 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
 
 describe("resolveCliBackendConfig alias precedence", () => {
   it("prefers the canonical backend key over legacy aliases when both are configured", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.cliBackends = [
-      createBackendEntry({
+    runtimeBackendEntries = [
+      createRuntimeBackendEntry({
         pluginId: "moonshot",
         id: "kimi",
         config: {
@@ -746,7 +782,6 @@ describe("resolveCliBackendConfig alias precedence", () => {
         },
       }),
     ];
-    setActivePluginRegistry(registry);
 
     const cfg = {
       agents: {
